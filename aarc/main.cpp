@@ -6,10 +6,7 @@
 //  Copyright © 2020 Antony Searle. All rights reserved.
 //
 
-#include <iostream>
+#define CATCH_CONFIG_MAIN
+#include "catch.hpp"
 
-int main(int argc, const char * argv[]) {
-    // insert code here...
-    std::cout << "Hello, World!\n";
-    return 0;
-}
+

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		CA47C1FE24B7086100B9C828 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA47C1FD24B7086100B9C828 /* main.cpp */; };
+		CA47C20724B7091D00B9C828 /* aarc.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA47C20524B7091D00B9C828 /* aarc.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -25,6 +26,9 @@
 /* Begin PBXFileReference section */
 		CA47C1FA24B7086100B9C828 /* aarc */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = aarc; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA47C1FD24B7086100B9C828 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
+		CA47C20424B708D300B9C828 /* catch.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = catch.hpp; sourceTree = "<group>"; };
+		CA47C20524B7091D00B9C828 /* aarc.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = aarc.cpp; sourceTree = "<group>"; };
+		CA47C20624B7091D00B9C828 /* aarc.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = aarc.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,7 +61,10 @@
 		CA47C1FC24B7086100B9C828 /* aarc */ = {
 			isa = PBXGroup;
 			children = (
+				CA47C20424B708D300B9C828 /* catch.hpp */,
 				CA47C1FD24B7086100B9C828 /* main.cpp */,
+				CA47C20524B7091D00B9C828 /* aarc.cpp */,
+				CA47C20624B7091D00B9C828 /* aarc.hpp */,
 			);
 			path = aarc;
 			sourceTree = "<group>";
@@ -119,6 +126,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				CA47C20724B7091D00B9C828 /* aarc.cpp in Sources */,
 				CA47C1FE24B7086100B9C828 /* main.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -238,7 +246,9 @@
 		CA47C20224B7086100B9C828 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_STYLE = Automatic;
+				GCC_C_LANGUAGE_STANDARD = c11;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -246,7 +256,9 @@
 		CA47C20324B7086100B9C828 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_STYLE = Automatic;
+				GCC_C_LANGUAGE_STANDARD = c11;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
