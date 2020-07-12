@@ -27,12 +27,12 @@ TEST_CASE("Stack") {
     for (int i = 0; i != M; ++i) {
         t.emplace_back([&, i]() {
             for (int j = 0; j != N; ++j) {
-                a.push(j + i * N + 1);
+                a.push(j + i * N);
             }
             std::vector<int> y;
             for (int j = 0; j != N * M; ++j) {
-                auto k = a.pop();
-                if (k)
+                int k = 0;
+                if (a.try_pop(k))
                     y.emplace_back(k);
             }
             m.lock();
@@ -50,8 +50,8 @@ TEST_CASE("Stack") {
     std::sort(x.begin(), x.end());
     x.erase(std::unique(x.begin(), x.end()), x.end());
     REQUIRE(x.size() == N * M);
-    REQUIRE(x.front() == 1);
-    REQUIRE(x.back() == N * M);
+    REQUIRE(x.front() == 0);
+    REQUIRE(x.back() == N * M - 1);
     
     // all nodes were destroyed
     REQUIRE(decltype(a)::Node::_extant.load(std::memory_order_relaxed) == 0);
@@ -72,12 +72,12 @@ TEST_CASE("Queue") {
     for (int i = 0; i != M; ++i) {
         t.emplace_back([&, i]() {
             for (int j = 0; j != N; ++j) {
-                a.push(j + i * N + 1);
+                a.push(j + i * N);
             }
             std::vector<int> y;
             for (int j = 0; j != N + M; ++j) {
-                auto k = a.pop();
-                if (k)
+                int k = 0;
+                if (a.try_pop(k))
                     y.emplace_back(k);
             }
             m.lock();
@@ -95,7 +95,7 @@ TEST_CASE("Queue") {
     // when one thread pops the values pushed by another thread, their relative ordering is preserved
     for (auto& y : z) {
         std::stable_sort(y.begin(), y.end(), [=](int a, int b) {
-            return ((a - 1) / N) < ((b - 1) / N); // coarse sort by pushing thread
+            return (a / N) < (b / N); // coarse sort by pushing thread
         });
         // results in fine sort by value
         REQUIRE(std::is_sorted(y.begin(), y.end()));
@@ -105,8 +105,8 @@ TEST_CASE("Queue") {
     std::sort(x.begin(), x.end());
     x.erase(std::unique(x.begin(), x.end()), x.end());
     REQUIRE(x.size() == N * M);
-    REQUIRE(x.front() == 1);
-    REQUIRE(x.back() == N * M);
+    REQUIRE(x.front() == 0);
+    REQUIRE(x.back() == N * M - 1);
 
     // only the final sentinel node and its predecessor (the stale _tail) remain alive
     REQUIRE(decltype(a)::Node::_extant.load(std::memory_order_relaxed) == 2);

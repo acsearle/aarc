@@ -241,7 +241,7 @@ struct Stack {
         }
     }
     
-    T pop() {
+    bool try_pop(T& x) {
         std::uint64_t a = _head.load(std::memory_order_relaxed);
         while (a & LO) {
             assert(a & HI);
@@ -249,15 +249,15 @@ struct Stack {
             if (_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 Node* ptr = (Node*) (b & LO);
                 do if (_head.compare_exchange_weak(b, ptr->_next, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                    T x{std::move(*ptr->_payload)};
+                    x = std::move(*ptr->_payload);
                     ptr->_payload.destroy();
                     _release(ptr, (b >> 48) + 2);
-                    return x;
+                    return true;
                 } while ((b & LO) == (a & LO));
                 _release(ptr, 1);
             }
         }
-        return T{};
+        return false;
     }
     
 };
@@ -294,7 +294,7 @@ struct Queue {
         Node* p = (Node*) (sentinel & LO);
         p->_count.fetch_sub(2);
     }
-    
+        
     static void _release(Node* ptr, std::int64_t n) {
         auto m = ptr->_count.fetch_sub(n, std::memory_order_release);
         assert(m >= n);
@@ -353,7 +353,7 @@ struct Queue {
         }
     }
     
-    T pop() {
+    bool try_pop(T& x) {
         std::uint64_t a = _head.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
         Node* ptr = nullptr;
@@ -370,13 +370,13 @@ struct Queue {
                 if (c & LO) {
 
                     do if (_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
-                        // we installed _head and have one unit of ownership of the node
-                        _release(ptr, (b >> 48) + 2);
+                        // we installed _head and have one unit of ownership of the new head node
+                        _release(ptr, (b >> 48) + 2); // release old head node
                         ptr = (Node*) (c & LO);
-                        T x{std::move(*ptr->_payload)};
+                        x = std::move(*ptr->_payload);
                         ptr->_payload.destroy();
-                        _release(ptr, 1);
-                        return x;
+                        _release(ptr, 1); // release new head node
+                        return true;
                     } while ((b & LO) == (a & LO));
                     // somebody else swung the head, release the old one
                     _release(ptr, 1);
@@ -385,31 +385,20 @@ struct Queue {
                 } else {
                     // queue is empty
                     _release(ptr, 1); // <-- this path tends to drain the sentinel's weight
-                    return T{};
+                    return false;
                 }
             }
             // failed to acquire head, try again
         }
     }
                     
-                    
-                    
-                    
-                    /*
-                if (_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
-                    _release(ptr, (b >> 48) + 2);
-                    ptr = (Node*) (c & LO);
-                    T x{std::move(*ptr->_payload)};
-                    ptr->_payload.destroy();
-                    _release(ptr, 1);
-                    return x;
-                } else {
-                    assert(false);
-                }
-                
-            }
-        }
-    }*/
+    ~Queue() {
+        
+        // destroy all unpopped nodes
+        // tail can lag head which makes things a bit tricky
+        
+        
+    }
     
     
 };
