@@ -54,7 +54,7 @@ TEST_CASE("Stack") {
     REQUIRE(x.back() == N * M - 1);
     
     // all nodes were destroyed
-    REQUIRE(decltype(a)::Node::_extant.load(std::memory_order_relaxed) == 0);
+    REQUIRE(Accountant::get() == 0);
     
 }
 
@@ -62,7 +62,7 @@ TEST_CASE("Queue") {
 
     Queue<int> a;
     
-    auto N = 10'000;
+    auto N = 100'000;
     auto M = 16;
     
     std::vector<std::thread> t;
@@ -75,7 +75,7 @@ TEST_CASE("Queue") {
                 a.push(j + i * N);
             }
             std::vector<int> y;
-            for (int j = 0; j != N + M; ++j) {
+            for (int j = 0; j != 2 * N; ++j) {
                 int k = 0;
                 if (a.try_pop(k))
                     y.emplace_back(k);
@@ -109,7 +109,7 @@ TEST_CASE("Queue") {
     REQUIRE(x.back() == N * M - 1);
 
     // only the final sentinel node and its predecessor (the stale _tail) remain alive
-    REQUIRE(decltype(a)::Node::_extant.load(std::memory_order_relaxed) == 2);
+    REQUIRE(Accountant::get() == 2);
     
 }
 

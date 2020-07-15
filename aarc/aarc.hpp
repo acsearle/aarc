@@ -38,6 +38,30 @@ struct Maybe {
 
 };
 
+struct Accountant {
+    
+    inline static std::atomic<std::int64_t> _count{0};
+    
+    static std::int64_t get() {
+        return _count.load(std::memory_order_relaxed);
+    }
+
+    static void _add() {
+        auto n = _count.fetch_add(1, std::memory_order_relaxed);
+        assert(n >= 0);
+    }
+    
+    static void _sub() {
+        auto n = _count.fetch_sub(1, std::memory_order_relaxed);
+        assert(n >= 1);
+    }
+        
+    Accountant() { _add(); }
+    Accountant(Accountant const&) { _add(); }
+    ~Accountant() { _sub(); }
+    
+};
+
 template<typename T>
 struct Arc {
     
@@ -204,15 +228,11 @@ template<typename T>
 struct Stack {
     
     struct Node {
-        
-        inline static std::atomic<std::int64_t> _extant = 0;
-        
+                
         std::atomic<std::int64_t> _count;
         std::uint64_t _next;
         Maybe<T> _payload;
-        
-        Node() : _count{0x0000'0000'0001'0000} { _extant.fetch_add(1, std::memory_order_relaxed); }
-        ~Node() { _extant.fetch_sub(1, std::memory_order_relaxed); }
+        Accountant _auditor;
         
     };
     
@@ -226,7 +246,7 @@ struct Stack {
     
     template<typename... Args>
     void push(Args&&... args) {
-        Node* ptr = new Node;
+        Node* ptr = new Node{ 0x0000'0000'0001'0000 };
         ptr->_payload.construct(std::forward<Args>(args)...);
         ptr->_next = _head.load(std::memory_order_relaxed);
         std::uint64_t desired = HI | (std::uint64_t) ptr;
@@ -275,10 +295,9 @@ struct Queue {
         std::atomic<std::int64_t> _count;
         std::atomic<std::uint64_t> _next; // changes from zero to next node and then immutable
         Maybe<T> _payload;
+        Accountant _auditor;
         
         inline static std::atomic<std::int64_t> _extant = 0;
-        Node() : _count{0x0000'0000'0002'0002}, _next{0} { _extant.fetch_add(1, std::memory_order_relaxed); }
-        ~Node() { _extant.fetch_sub(1, std::memory_order_relaxed); }
 
     };
     
@@ -286,13 +305,12 @@ struct Queue {
     std::atomic<std::uint64_t> _tail;
     
     Queue()
-    : Queue{HI | (std::uint64_t) new Node/*{0x0000'0000'0002'0000, 0}*/} {
+    : Queue{HI | (std::uint64_t) new Node{0x0000'0000'0002'0000, 0}} {
     }
     
     explicit Queue(std::uint64_t sentinel)
     : _head{sentinel}, _tail{sentinel} {
         Node* p = (Node*) (sentinel & LO);
-        p->_count.fetch_sub(2);
     }
         
     static void _release(Node* ptr, std::int64_t n) {
@@ -307,7 +325,7 @@ struct Queue {
     
     template<typename... Args>
     void push(Args&&... args) {
-        Node* ptr = new Node/*{0x0000'0000'0002'0002, 0}*/;
+        Node* ptr = new Node{0x0000'0000'0002'0002, 0};
         // nodes are created with
         //     weight MAX to be installed in tail
         //   + weight   1 to be awarded to the tail installing thread
@@ -362,7 +380,7 @@ struct Queue {
             // _head always points to the sentinel before the (potentially empty) queue
             assert(a & LO);
             assert(a & HI); // <-- sentinel was drained, can happen if hammering on empty
-             b = a - ST;
+            b = a - ST;
             if (_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 // we can now read _head->_next
                 ptr = (Node*) (b & LO);
@@ -384,7 +402,12 @@ struct Queue {
                     a = b;
                 } else {
                     // queue is empty
-                    _release(ptr, 1); // <-- this path tends to drain the sentinel's weight
+                    do if (_head.compare_exchange_weak(b, b + ST, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                        // we put back the local weight we took
+                        return false;
+                    } while ((b & LO) == (a & LO));
+                    // head was changed, so we put weight back to global count
+                    _release(ptr, 1);
                     return false;
                 }
             }
