@@ -41,7 +41,7 @@ struct transfer {
     
     template<typename Promise>
     void await_suspend(std::experimental::coroutine_handle<Promise> h) {
-        pool::submit(std::move(h));
+        pool::submit_one(std::move(h));
     }
     
     void await_resume() {

@@ -68,8 +68,16 @@ struct fn {
 
 struct reactor {
     
+    // simple, portable reactor using select and std::mutex
+    
     // todo: replace C<A, std::function<void()>> with intrusive linked list nodes
-    //
+    
+    // todo: if we buffer the inputs and splice them in once per loop we
+    // only need to hold the locks very briefly
+    
+    // undefined behaviour when two waiters on the same fd event (served in
+    // order but the first task will race to e.g. read all the data before the
+    // second task sees it)
     
     // single thread that performs all file descriptor and timed waits
     std::thread _thread;
@@ -79,9 +87,10 @@ struct reactor {
     bool _cancelled;
     
     // lists of waiters
-    std::map<int, std::function<void()>> _readers;
-    std::map<int, std::function<void()>> _writers;
-    std::map<int, std::function<void()>> _excepters;
+    using L = std::list<std::pair<int, std::function<void()>>>;
+    L _readers;
+    L _writers;
+    L _excepters;
 
     struct cmp_first {
         template<typename A, typename B>
@@ -92,158 +101,148 @@ struct reactor {
 
     // notification file descriptors
     int _pipe[2];
+    std::size_t _notifications;
 
     reactor()
     : _cancelled{false} {
         auto r = pipe(_pipe);
         assert(r == 0);
-        _thread = std::thread(&reactor::run, this);
+        _thread = std::thread(&reactor::_run, this);
     }
     
-    void notify() {
+    void _notify() {
         unsigned char c{0};
         auto r = write(_pipe[1], &c, 1);
         assert(r == 1);
+        ++_notifications;
+    }
+    
+    void _when_able(int fd, std::function<void()> f, L& target) {
+        L tmp;
+        tmp.emplace_back(fd, std::move(f));
+        auto lock = std::unique_lock(_mutex);
+        target.splice(target.end(), tmp);
+        _notify();
     }
     
     void when_readable(int fd, std::function<void()> f) {
-        auto lock = std::unique_lock(_mutex);
-        _readers.emplace(fd, std::move(f));
-        notify();
+        _when_able(fd, std::move(f), _readers);
     }
 
     void when_writeable(int fd, std::function<void()> f) {
-        auto lock = std::unique_lock(_mutex);
-        _writers.emplace(fd, std::move(f));
-        notify();
+        _when_able(fd, std::move(f), _writers);
     }
     
     void when_exceptional(int fd, std::function<void()> f) {
-        auto lock = std::unique_lock(_mutex);
-        _excepters.emplace(fd, std::move(f));
-        notify();
+        _when_able(fd, std::move(f), _excepters);
     }
-    
-    template<typename Duration>
-    void after(Duration&& t, std::function<void()> f) {
-        auto lock = std::unique_lock{_mutex};
-        _timers.emplace(std::chrono::steady_clock::now() + std::forward<Duration>(t), std::move(f));
-        notify();
-    }
-    
+        
     template<typename TimePoint>
     void when(TimePoint&& t, std::function<void()> f) {
         auto lock = std::unique_lock{_mutex};
         _timers.emplace(std::forward<TimePoint>(t), std::move(f));
-        notify();
+        _notify();
+    }
+    
+    template<typename Duration>
+    void after(Duration&& t, std::function<void()> f) {
+        when(std::chrono::steady_clock::now() + std::forward<Duration>(t), std::move(f));
     }
 
-    void run() {
+    void _run() {
         
         std::list<std::function<void()>> pending;
-        auto now = std::chrono::steady_clock::now();
-        auto lock = std::unique_lock(_mutex);
-
-        while (!_cancelled) {
+        std::vector<char> buf;
+        
+        int count = 0;
+        
+        fd_set readset;
+        FD_ZERO(&readset);
+        FD_SET(_pipe[0], &readset);
+        
+        fd_set writeset;
+        FD_ZERO(&writeset);
+        fd_set* pwriteset = nullptr;
+        
+        fd_set exceptset;
+        FD_ZERO(&exceptset);
+        fd_set* pexceptset = nullptr;
+        
+        timeval timeout;
+        timeval *ptimeout = nullptr;
+        
+        for (;;) {
             
-            fd_set readfds; FD_ZERO(&readfds);
-            FD_SET(_pipe[0], &readfds);
-            int nfds = _pipe[0];
-            for (auto& p : _readers) {
-                FD_SET(p.first, &readfds);
-                nfds = std::max(nfds, p.first);
-            }
-                        
-            fd_set writefds;
-            fd_set* pwritefds = nullptr;
-            if (!_writers.empty()) {
-                FD_ZERO(&writefds);
-                pwritefds = &writefds;
-                for (auto& p : _writers) {
-                    FD_SET(p.first, &writefds);
-                    nfds = std::max(nfds, p.first);
-                }
-            }
+            auto lock = std::unique_lock{_mutex};
 
-            fd_set exceptfds;
-            fd_set* pexceptfds = nullptr;
-            if (!_excepters.empty()) {
-                FD_ZERO(&exceptfds);
-                pexceptfds = &exceptfds;
-                for (auto& p : _excepters) {
-                    FD_SET(p.first, &exceptfds);
-                    nfds = std::max(nfds, p.first);
-                }
-            }
+            if (_cancelled)
+                break;
 
-            timeval* timeout = nullptr;
-            timeval t0{0, 0};
+            if (count && FD_ISSET(_pipe[0], &readset)) {
+                buf.resize(std::max(_notifications, buf.size()));
+                [[maybe_unused]] ssize_t r = read(_pipe[0], buf.data(), _notifications);
+                assert(r > 0);
+                --count;
+            } else {
+                FD_SET(_pipe[0], &readset);
+            }
+            int maxfd = _pipe[0];
+
+            auto process = [&](L& list, fd_set* set) -> fd_set* {
+                for (auto i = list.begin(); i != list.end(); ) {
+                    int fd = i->first;
+                    if (count && FD_ISSET(fd, set)) {
+                        FD_CLR(fd, set);
+                        pending.emplace_back(std::move(i->second));
+                        i = list.erase(i);
+                        --count;
+                    } else {
+                        assert(!FD_ISSET(fd, set));
+                        FD_SET(i->first, set);
+                        maxfd = std::max(maxfd, i->first);
+                        ++i;
+                    }
+                }
+                return list.empty() ? nullptr : set;
+            };
+            
+            process(_readers, &readset);
+            pwriteset = process(_writers, &writeset);
+            pexceptset = process(_excepters, &exceptset);
+            
+            assert(count == 0);
+            
+            auto now = std::chrono::steady_clock::now();
+            
+            while ((!_timers.empty()) && (_timers.top().first <= now)) {
+                pending.emplace_back(std::move(_timers.top().second));
+                _timers.pop();
+            }
             if (!_timers.empty()) {
-                timeout = &t0;
-                if (_timers.top().first > now) {
-                    auto d = std::chrono::duration_cast<std::chrono::microseconds>(_timers.top().first - now);
-                    t0.tv_usec = (int) (d.count() % 1'000'000);
-                    t0.tv_sec = d.count() / 1'000'000;
-                }
+                auto usecs = std::chrono::duration_cast<std::chrono::microseconds>(_timers.top().first - now).count();
+                timeout.tv_usec = (int) (usecs % 1'000'000);
+                timeout.tv_sec = usecs / 1'000'000;
+                ptimeout = &timeout;
+            } else {
+                ptimeout = nullptr;
             }
             
             lock.unlock();
             
             if (!pending.empty())
                 pool::submit_many(std::move(pending));
-                        
-            auto r = select(nfds + 1, &readfds, pwritefds, nullptr, timeout);
-            if (r == -1)
-                perror(strerror(errno));
-                        
-            lock.lock();
-            
-            if (_cancelled)
-                break;
-                        
-            if (FD_ISSET(_pipe[0], &readfds)) {
-                constexpr int N = 256;
-                unsigned char buf[N];
-                ssize_t r = read(_pipe[0], buf, N);
-                // printf("(cleared %td notifications)\n", r);
-                assert(r > 0);
-            }
-                        
-            for (auto i = _readers.begin(); i != _readers.end(); ) {
-                if (FD_ISSET(i->first, &readfds)) {
-                    pending.push_back(std::move(i->second));
-                    i = _readers.erase(i);
-                } else {
-                    ++i;
-                }
-            }
 
-            for (auto i = _writers.begin(); i != _writers.end(); ) {
-                if (FD_ISSET(i->first, &writefds)) {
-                    pending.push_back(std::move(i->second));
-                    i = _writers.erase(i);
-                } else {
-                    ++i;
-                }
+            count = select(maxfd + 1, &readset, pwriteset, pexceptset, ptimeout);
+            
+            if (count == -1) {
+                assert(false);
+                count = 0;
+                FD_ZERO(&readset);
+                FD_ZERO(&writeset);
+                FD_ZERO(&exceptset);
             }
             
-            for (auto i = _excepters.begin(); i != _excepters.end(); ) {
-                if (FD_ISSET(i->first, &exceptfds)) {
-                    pending.push_back(std::move(i->second));
-                    i = _excepters.erase(i);
-                } else {
-                    ++i;
-                }
-            }
-            
-            now = std::chrono::steady_clock::now();
-            
-            while (!_timers.empty() && _timers.top().first <= now) {
-                pending.push_back(std::move(_timers.top().second));
-                _timers.pop();
-            }
-            
-        } // while(!_cancelled)
+        } // for(;;)
         
     } // run
     
@@ -252,14 +251,14 @@ struct reactor {
         return r;
     }
     
-    void cancel() {
+    void _cancel() {
         auto lock = std::unique_lock(_mutex);
         _cancelled = true;
-        notify();
+        _notify();
     }
     
     ~reactor() {
-        cancel();
+        _cancel();
         _thread.join();
         close(_pipe[1]);
         close(_pipe[0]);

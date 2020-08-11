@@ -51,54 +51,6 @@ struct pool {
         }
     }
     
-    ~pool() {
-        _cancel();
-        for (auto&& t : _threads)
-            t.join();
-    }
-    
-    static pool& get() {
-        static pool p;
-        return p;
-    }
-    
-    template<typename Callable>
-    void _submit(Callable&& f) {
-        auto lock = std::unique_lock{_mutex};
-        if (!_cancelled) {
-            _queue.emplace_back(std::forward<Callable>(f));
-            if (_waiters) {
-                lock.unlock();
-                _ready.notify_one();
-            }
-        }
-    }
-    
-    template<typename Callable>
-    static void submit(Callable&& f) {
-        get()._submit(std::forward<Callable>(f));
-    }
-    
-    void _submit_many(std::list<std::function<void()>>&& q) {
-        auto lock = std::unique_lock{_mutex};
-        if (!_cancelled) {
-            _queue.splice(_queue.end(), std::move(q));
-            if (_waiters) {
-                if (std::min(_waiters, _queue.size()) > 1) {
-                    lock.unlock();
-                    _ready.notify_all();
-                } else {
-                    lock.unlock();
-                    _ready.notify_one();
-                }
-            }
-        }
-    }
-
-    static void submit_many(std::list<std::function<void()>>&& q) {
-        get()._submit_many(std::move(q));
-    }
-
     void _cancel() {
         auto lock = std::unique_lock{_mutex};
         if (!_cancelled) {
@@ -112,9 +64,53 @@ struct pool {
         }
     }
     
+    ~pool() {
+        _cancel();
+        for (auto&& t : _threads)
+            t.join();
+    }
+    
+    static pool& _get() {
+        static pool p;
+        return p;
+    }
+    
     template<typename Callable>
-    static void cancel() {
-        get()._cancel();
+    void _submit_one(Callable&& f) {
+        auto lock = std::unique_lock{_mutex};
+        if (!_cancelled) {
+            _queue.emplace_back(std::forward<Callable>(f));
+            if (_waiters) {
+                lock.unlock();
+                _ready.notify_one();
+            }
+        }
+    }
+    
+    void _submit_many(std::list<std::function<void()>>&& q) {
+        auto lock = std::unique_lock{_mutex};
+        if (!_cancelled) {
+            auto n = std::min(q.size(), _waiters);
+            if (n) {
+                _queue.splice(_queue.end(), std::move(q));
+                lock.unlock();
+                if (n > 1)
+                    _ready.notify_all();
+                else
+                    _ready.notify_one();
+            }
+        } else {
+            lock.unlock();
+            q.clear();
+        }
+    }
+
+    template<typename Callable>
+    static void submit_one(Callable&& f) {
+        _get()._submit_one(std::forward<Callable>(f));
+    }
+    static void submit_many(std::list<std::function<void()>>&& q) {
+        _get()._submit_many(std::move(q));
     }
         
 }; // struct pool
