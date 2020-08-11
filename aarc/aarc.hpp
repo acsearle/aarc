@@ -224,6 +224,7 @@ struct Queue {
  */
 
 
+
 template<typename T>
 struct Stack {
     
@@ -310,7 +311,6 @@ struct Queue {
     
     explicit Queue(std::uint64_t sentinel)
     : _head{sentinel}, _tail{sentinel} {
-        Node* p = (Node*) (sentinel & LO);
     }
         
     static void _release(Node* ptr, std::int64_t n) {
@@ -325,14 +325,14 @@ struct Queue {
     
     template<typename... Args>
     void push(Args&&... args) {
-        Node* ptr = new Node{0x0000'0000'0002'0002, 0};
+        Node* ptr = new Node{0x0000'0000'0002'0000, 0};
         // nodes are created with
-        //     weight MAX to be installed in tail
-        //   + weight   1 to be awarded to the tail installing thread
-        //   + weight MAX to be installed in head
-        //   + weight   1 to be awarded to the head installing thread
+        //     weight MAX-1 to be installed in tail
+        //   + weight     1 to be awarded to the tail installing thread
+        //   + weight MAX-1 to be installed in head
+        //   + weight     1 to be awarded to the head installing thread
         ptr->_payload.construct(std::forward<Args>(args)...);
-        std::uint64_t z = HI | (std::uint64_t) ptr;
+        std::uint64_t z = 0xFFFE'0000'0000'0000 | (std::uint64_t) ptr;
         ptr = nullptr;
         std::uint64_t a = _tail.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
@@ -349,9 +349,21 @@ struct Queue {
                 c = 0;
                 do if (ptr->_next.compare_exchange_weak(c, z, std::memory_order_release, std::memory_order_acquire)) {
                     // we installed a new node
-                    // todo: move tail forward here as a possible optimization
-                    _release(ptr, 1); // release tail
+
+                    // we can try to eagerly swing the head here
+                    // not clear if this is an optimization (we do less total work)
+                    // or a pessimization (we increase contention on _tail)
+                    z |= HI;
+                    do if (_tail.compare_exchange_weak(b, z, std::memory_order_release, std::memory_order_relaxed)) {
+                        // release tail's current count plus our one unit
+                        _release(ptr, (b >> 48) + 2);
+                        return;
+                    } while ((b & LO) == (a & LO));
+                     
+                    // somebody else won the race
+                    _release(ptr, 1); // release our one unit of old tail
                     return;
+                    
                 } while (!c);
                 // we failed to install the node and instead must swing tail to next
                 do if (_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
@@ -406,7 +418,7 @@ struct Queue {
                         // we put back the local weight we took
                         return false;
                     } while ((b & LO) == (a & LO));
-                    // head was changed, so we put weight back to global count
+                    // head was changed before we could return weight, so we put weight back to global count
                     _release(ptr, 1);
                     return false;
                 }
@@ -425,5 +437,46 @@ struct Queue {
     
     
 };
+
+
+
+
+struct Z {
+    
+    std::atomic<std::int64_t> _count;
+    
+};
+
+template<typename F>
+void thing(std::atomic<std::uint64_t>& a, F&& f) {
+    
+    // read a pointer, subtract weight, dereference the pointer, replace the pointer with something from deref
+    
+    std::uint64_t b = a.load(std::memory_order_relaxed);
+    
+    while ((b & 0xFFFF'0000'0000'0000)) {
+
+        std::uint64_t c = b - 0x0001'0000'0000'0000;
+
+        if (a.compare_exchange_weak(b, c, std::memory_order_acquire, std::memory_order_relaxed)) {
+            
+            Z* d = (Z*) (c & 0x0000'FFFF'FFFF'FFFF);
+            
+            auto e = f(d);
+            
+            do if (a.compare_exchange_weak(c, e, std::memory_order_release, std::memory_order_relaxed)) {
+                
+                // ?
+                
+            } while (!((c ^ e) & 0x0000'FFFF'FFFF'FFFF));
+            
+        }
+        
+    }
+    
+    
+}
+
+
 
 #endif /* aarc_hpp */
