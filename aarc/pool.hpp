@@ -28,7 +28,7 @@ struct pool {
     pool() {
         auto n = std::thread::hardware_concurrency();
         _threads.reserve(n);
-        for (decltype(n) i = 0; i != n; ++i)
+        while (_threads.size() != n)
             _threads.emplace_back(&pool::run, this);
     }
     
@@ -37,15 +37,15 @@ struct pool {
         while (!_cancelled) {
             if (_queue.empty()) {
                 ++_waiters;
-                _ready.wait(lock);
+                _ready.wait(lock); // <-- unlocked, suspended while waiting
                 --_waiters;
             } else {
-                auto f{std::move(_queue.front())};
-                _queue.pop_front();
-                lock.unlock();
-                f();
-                f = nullptr; // call destructor while unlocked
-                // allow exceptions to call terminate
+                {
+                    auto f{std::move(_queue.front())};
+                    _queue.pop_front();
+                    lock.unlock();
+                    f(); // <-- unlocked while executing
+                }
                 lock.lock();
             }
         }
@@ -56,18 +56,19 @@ struct pool {
         if (!_cancelled) {
             _cancelled = true;
             decltype(_queue) tmp;
-            using std::swap;
-            swap(tmp, _queue);
+            tmp.swap(_queue);
             lock.unlock();
             _ready.notify_all();
-            // tmp destroys all pending jobs
-        }
+        }   // <-- tmp destroys all pending jobs
     }
     
     ~pool() {
         _cancel();
-        for (auto&& t : _threads)
-            t.join();
+        while (!_threads.empty()) {
+            _threads.back().join();
+            _threads.pop_back();
+        }
+        assert(_waiters == 0);
     }
     
     static pool& _get() {
@@ -109,6 +110,7 @@ struct pool {
     static void submit_one(Callable&& f) {
         _get()._submit_one(std::forward<Callable>(f));
     }
+    
     static void submit_many(std::list<std::function<void()>>&& q) {
         _get()._submit_many(std::move(q));
     }

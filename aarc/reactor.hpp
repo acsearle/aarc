@@ -17,6 +17,7 @@
 #include <map>
 #include <mutex>
 #include <queue>
+#include <stack>
 #include <thread>
 
 
@@ -75,6 +76,10 @@ struct reactor {
     // todo: if we buffer the inputs and splice them in once per loop we
     // only need to hold the locks very briefly
     
+    // todo: there is some threshold at which batch submission to the
+    // priority_queue and rebuilding the heap (3N) beats indiviudally adding
+    // M elements (M ln(N))
+    
     // undefined behaviour when two waiters on the same fd event (served in
     // order but the first task will race to e.g. read all the data before the
     // second task sees it)
@@ -84,41 +89,41 @@ struct reactor {
     
     // mutex held when not in select
     std::mutex _mutex;
+    
+    // one-time cancellation
     bool _cancelled;
     
-    // lists of waiters
-    using L = std::list<std::pair<int, std::function<void()>>>;
-    L _readers;
-    L _writers;
-    L _excepters;
+    // recently-added waiters buffer
+    using LIST = std::list<std::pair<int, std::function<void()>>>;
+    LIST _readers_buf;
+    LIST _writers_buf;
+    LIST _excepters_buf;
 
-    struct cmp_first {
-        template<typename A, typename B>
-        bool operator()(A&& a, B&& b) { return a.first < b.first; }
-    };
-    using P = std::pair<std::chrono::time_point<std::chrono::steady_clock>, std::function<void()>>;
-    std::priority_queue<P, std::vector<P>, cmp_first> _timers;
+    // recently-added timers buffer
+    using PAIR = std::pair<std::chrono::time_point<std::chrono::steady_clock>, std::function<void()>>;
+    std::stack<PAIR, std::vector<PAIR>> _timers_buf;
 
     // notification file descriptors
-    int _pipe[2];
+    int _pipe[2]; // <-- mutex protects write end of pipe, but not read end
     std::size_t _notifications;
 
     reactor()
-    : _cancelled{false} {
-        auto r = pipe(_pipe);
-        assert(r == 0);
+    : _cancelled{false}
+    , _notifications{0} {
+        if (pipe(_pipe) != 0)
+            (void) perror(strerror(errno)), abort();
         _thread = std::thread(&reactor::_run, this);
     }
     
     void _notify() {
         unsigned char c{0};
-        auto r = write(_pipe[1], &c, 1);
-        assert(r == 1);
+        if (write(_pipe[1], &c, 1) != 1)
+            (void) perror(strerror(errno)), abort();
         ++_notifications;
     }
     
-    void _when_able(int fd, std::function<void()> f, L& target) {
-        L tmp;
+    void _when_able(int fd, std::function<void()> f, LIST& target) {
+        LIST tmp;
         tmp.emplace_back(fd, std::move(f));
         auto lock = std::unique_lock(_mutex);
         target.splice(target.end(), tmp);
@@ -126,21 +131,21 @@ struct reactor {
     }
     
     void when_readable(int fd, std::function<void()> f) {
-        _when_able(fd, std::move(f), _readers);
+        _when_able(fd, std::move(f), _readers_buf);
     }
 
     void when_writeable(int fd, std::function<void()> f) {
-        _when_able(fd, std::move(f), _writers);
+        _when_able(fd, std::move(f), _writers_buf);
     }
     
     void when_exceptional(int fd, std::function<void()> f) {
-        _when_able(fd, std::move(f), _excepters);
+        _when_able(fd, std::move(f), _excepters_buf);
     }
         
     template<typename TimePoint>
     void when(TimePoint&& t, std::function<void()> f) {
         auto lock = std::unique_lock{_mutex};
-        _timers.emplace(std::forward<TimePoint>(t), std::move(f));
+        _timers_buf.emplace(std::forward<TimePoint>(t), std::move(f));
         _notify();
     }
     
@@ -150,6 +155,15 @@ struct reactor {
     }
 
     void _run() {
+        
+        struct cmp_first {
+            bool operator()(PAIR const& a, PAIR const& b) { return a.first < b.first; }
+        };
+        
+        LIST readers;
+        LIST writers;
+        LIST excepters;
+        std::priority_queue<PAIR, std::vector<PAIR>, cmp_first> timers;
         
         std::list<std::function<void()>> pending;
         std::vector<char> buf;
@@ -171,16 +185,29 @@ struct reactor {
         timeval timeout;
         timeval *ptimeout = nullptr;
         
+        std::size_t notifications_observed;
+        
         for (;;) {
             
-            auto lock = std::unique_lock{_mutex};
-
-            if (_cancelled)
-                break;
+            {
+                auto lock = std::unique_lock{_mutex}; // <-- briefly lock to update state
+                
+                if (_cancelled)
+                    break;
+                
+                readers.splice(readers.cend(), _readers_buf); // <-- avoid allocations
+                writers.splice(writers.cend(), _writers_buf);
+                excepters.splice(excepters.cend(), _excepters_buf);
+                while (!_timers_buf.empty()) {
+                    timers.push(std::move(_timers_buf.top()));
+                    _timers_buf.pop();
+                }
+                notifications_observed = std::exchange(_notifications, 0);
+            }   // <-- unlock
 
             if (count && FD_ISSET(_pipe[0], &readset)) {
-                buf.resize(std::max(_notifications, buf.size()));
-                [[maybe_unused]] ssize_t r = read(_pipe[0], buf.data(), _notifications);
+                buf.reserve(std::max(notifications_observed, buf.capacity()));
+                [[maybe_unused]] ssize_t r = read(_pipe[0], buf.data(), notifications_observed);
                 assert(r > 0);
                 --count;
             } else {
@@ -188,7 +215,7 @@ struct reactor {
             }
             int maxfd = _pipe[0];
 
-            auto process = [&](L& list, fd_set* set) -> fd_set* {
+            auto process = [&](LIST& list, fd_set* set) -> fd_set* {
                 for (auto i = list.begin(); i != list.end(); ) {
                     int fd = i->first;
                     if (count && FD_ISSET(fd, set)) {
@@ -206,40 +233,35 @@ struct reactor {
                 return list.empty() ? nullptr : set;
             };
             
-            process(_readers, &readset);
-            pwriteset = process(_writers, &writeset);
-            pexceptset = process(_excepters, &exceptset);
+            process(readers, &readset);
+            pwriteset = process(writers, &writeset);
+            pexceptset = process(excepters, &exceptset);
             
             assert(count == 0);
             
             auto now = std::chrono::steady_clock::now();
             
-            while ((!_timers.empty()) && (_timers.top().first <= now)) {
-                pending.emplace_back(std::move(_timers.top().second));
-                _timers.pop();
+            while ((!timers.empty()) && (timers.top().first <= now)) {
+                pending.emplace_back(std::move(timers.top().second));
+                timers.pop();
             }
-            if (!_timers.empty()) {
-                auto usecs = std::chrono::duration_cast<std::chrono::microseconds>(_timers.top().first - now).count();
+            if (!timers.empty()) {
+                auto usecs = std::chrono::duration_cast<std::chrono::microseconds>(timers.top().first - now).count();
                 timeout.tv_usec = (int) (usecs % 1'000'000);
                 timeout.tv_sec = usecs / 1'000'000;
                 ptimeout = &timeout;
             } else {
                 ptimeout = nullptr;
             }
-            
-            lock.unlock();
-            
+                        
             if (!pending.empty())
                 pool::submit_many(std::move(pending));
 
             count = select(maxfd + 1, &readset, pwriteset, pexceptset, ptimeout);
             
             if (count == -1) {
-                assert(false);
-                count = 0;
-                FD_ZERO(&readset);
-                FD_ZERO(&writeset);
-                FD_ZERO(&exceptset);
+                perror(strerror(errno));
+                abort();
             }
             
         } // for(;;)
