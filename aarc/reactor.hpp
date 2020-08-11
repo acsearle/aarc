@@ -23,46 +23,193 @@
 
 #include "pool.hpp"
 
-struct fn {
+template<typename T>
+struct maybe {
     
-    struct base {
-        base() : _fd(0) {}
-        base* _next;
-        base* _prev;
+    alignas(T) unsigned char raw[sizeof(T)];
+    
+    template<typename... Args>
+    void emplace(Args&&... args) {
+        new (raw) T(std::forward<Args>(args)...);
+    }
+    
+    void erase() const {
+        reinterpret_cast<T const*>(raw)->~T();
+    }
+    
+    T& get() { return reinterpret_cast<T&>(*raw); }
+    T const& get() const { return reinterpret_cast<T const&>(*raw); }
+
+};
+
+
+// unit of work
+//
+// std::function<void()>
+// std::forward_list<std::function<void()>>
+// std::forward_list<std::pair<..., std::function<void()>>>
+//
+// polymorphic task wrapper and intrusive atomic list node
+//
+
+template<typename R>
+struct fn {
+                
+    struct alignas(16) node {
+        
+        // void* __vtbl
+        
+        std::atomic<std::uint64_t> _count;
+        
+        union {
+            std::uint64_t _raw_next;
+            std::atomic<std::uint64_t> _atomic_next;
+        };
+        
         union {
             int _fd;
             std::chrono::time_point<std::chrono::steady_clock> _t;
         };
-        virtual ~base() = default;
-        virtual void operator()() = 0;
-    };
-    
-    std::unique_ptr<base> _ptr;
-    
-    template<typename T>
-    struct derived : base {
         
-        T _payload;
+        node()
+        : _count(0x0000'0000'0001'0000)
+        , _raw_next{0}
+        , _fd(0) {}
+        
+        void release(std::uint64_t n) {
+            auto m = _count.fetch_sub(n, std::memory_order_release);
+            assert(m >= n);
+            if (m == n) {
+                [[maybe_unused]] auto z = _count.load(std::memory_order_acquire);
+                assert(z == 0);
+                delete this;
+            }
+        }
+
+        virtual ~node() noexcept = default;
+        virtual R call_and_erase() { abort(); }
+        virtual void erase() noexcept { abort(); }
+
+    };
+        
+    template<typename T>
+    struct wrapper : node {
+        
+        maybe<T> _payload;
         
         template<typename... Args>
-        derived(Args&&... args)
-        : base()
+        wrapper(Args&&... args)
+        : node()
         , _payload(std::forward<Args>(args)...) {
         }
-        
-        virtual ~derived() override final = default;
-        virtual void operator()() override final {
-            _payload();
+                
+        virtual ~wrapper() noexcept override final = default;
+        virtual R call_and_erase() override final {
+            if constexpr (std::is_same_v<R, void>) {
+                _payload.get()();
+                erase();
+            } else {
+                R r{_payload.get()()};
+                erase();
+                return r;
+            }
         }
+        virtual void erase() noexcept override final {
+            _payload.erase();
+        };
+
     };
     
+    static constexpr std::uint64_t PTR = 0x0000'FFFF'FFFF'FFF0;
+    static constexpr std::uint64_t CNT = 0xFFFF'0000'0000'0000;
+    static constexpr std::uint64_t TAG = 0x0000'0000'0000'000F;
+    static constexpr std::uint64_t LOW = 0x0000'0000'0000'FFFF;
+    
+    static node* ptr(std::uint64_t v) {
+        return reinterpret_cast<node*>(v & PTR);
+    }
+    
+    static std::uint64_t cnt(std::uint64_t v) {
+        return (v >> 48) + 1;
+    }
+    
+    static std::uint64_t tag(std::uint64_t v) {
+        return v & TAG;
+    }
+    
+    static std::uint64_t val(void* p) {
+        auto n = reinterpret_cast<std::uint64_t>(p);
+        assert(!(n & ~PTR));
+        return n;
+    }
+
+    static std::uint64_t val(std::uint64_t n, void* p) {
+        n = (n - 1);
+        assert(!(n & ~LOW));
+        return (n << 48) | val(p);
+    }
+
+    static std::uint64_t val(std::uint64_t n, void* p, std::uint64_t t) {
+        assert(!(t & ~TAG));
+        return val(n, p) | t;
+    }
+        
+    std::uint64_t _value;
+    
+    fn()
+    : _value{0} {
+    }
+
+    fn(fn const&) = delete;
+    
+    fn(fn&& other)
+    : _value(std::exchange(other._value, 0)) {
+    }
+    
+    explicit fn(std::uint64_t value)
+    : _value(value) {
+    }
+
+    ~fn() {
+        // ptr(_value)->release(cnt(_value));
+        // delete ptr(_value);
+        assert(_value == 0);
+    }
+    
+    void swap(fn& other) { using std::swap; swap(_value, other._value); }
+
+    fn& operator=(fn const&) = delete;
+    
+    fn& operator=(fn&& other) {
+        fn(std::move(other)).swap(*this);
+        return *this;
+    }
+
     template<typename T, typename... Args>
     static fn from(Args&&... args) {
-        return fn{new derived<T>(std::forward<Args>(args)...)};
+        return fn(CNT | val(new wrapper<T>(std::forward<Args>(args)...)));
+    }
+    
+    static fn sentinel() {
+        return fn{new node};
     }
     
     void operator()() {
-        (*_ptr)();
+        auto p = ptr(_value);
+        assert(p);
+        p->call_and_erase();
+    }
+    
+    void unsafe_release() {
+        ptr(_value)->release(cnt(_value));
+    }
+    
+    void unsafe_delete() {
+        delete ptr(_value);
+    }
+    
+    void unsafe_erase() {
+        ptr(_value)->erase();
     }
     
 };
@@ -70,9 +217,7 @@ struct fn {
 struct reactor {
     
     // simple, portable reactor using select and std::mutex
-    
-    // todo: replace C<A, std::function<void()>> with intrusive linked list nodes
-    
+        
     // todo: if we buffer the inputs and splice them in once per loop we
     // only need to hold the locks very briefly
     
@@ -81,8 +226,8 @@ struct reactor {
     // M elements (M ln(N))
     
     // undefined behaviour when two waiters on the same fd event (served in
-    // order but the first task will race to e.g. read all the data before the
-    // second task sees it)
+    // reverse order but the first task will race to e.g. read all the data
+    // before the second task sees it)
     
     // single thread that performs all file descriptor and timed waits
     std::thread _thread;
@@ -124,7 +269,7 @@ struct reactor {
     
     void _when_able(int fd, std::function<void()> f, LIST& target) {
         LIST tmp;
-        tmp.emplace_back(fd, std::move(f));
+        tmp.emplace_front(fd, std::move(f));
         auto lock = std::unique_lock(_mutex);
         target.splice(target.end(), tmp);
         _notify();
@@ -145,19 +290,24 @@ struct reactor {
     template<typename TimePoint>
     void when(TimePoint&& t, std::function<void()> f) {
         auto lock = std::unique_lock{_mutex};
-        _timers_buf.emplace(std::forward<TimePoint>(t), std::move(f));
+        _timers_buf.emplace(std::forward<TimePoint>(t),
+                            std::move(f));
         _notify();
     }
     
     template<typename Duration>
     void after(Duration&& t, std::function<void()> f) {
-        when(std::chrono::steady_clock::now() + std::forward<Duration>(t), std::move(f));
+        when(std::chrono::steady_clock::now() + std::forward<Duration>(t),
+             std::move(f));
     }
 
     void _run() {
         
         struct cmp_first {
-            bool operator()(PAIR const& a, PAIR const& b) { return a.first < b.first; }
+            bool operator()(PAIR const& a,
+                            PAIR const& b) {
+                return a.first > b.first; // <-- reverse order puts earliest at top of priority queue
+            }
         };
         
         LIST readers;
@@ -168,11 +318,10 @@ struct reactor {
         std::list<std::function<void()>> pending;
         std::vector<char> buf;
         
-        int count = 0;
+        int count = 0; // <-- the number of events observed by select
         
         fd_set readset;
         FD_ZERO(&readset);
-        FD_SET(_pipe[0], &readset);
         
         fd_set writeset;
         FD_ZERO(&writeset);
@@ -185,7 +334,7 @@ struct reactor {
         timeval timeout;
         timeval *ptimeout = nullptr;
         
-        std::size_t notifications_observed;
+        std::size_t outstanding = 0; // <-- single-byte write notifications we have synchronized with but not yet cleared
         
         for (;;) {
             
@@ -194,21 +343,27 @@ struct reactor {
                 
                 if (_cancelled)
                     break;
-                
-                readers.splice(readers.cend(), _readers_buf); // <-- avoid allocations
-                writers.splice(writers.cend(), _writers_buf);
-                excepters.splice(excepters.cend(), _excepters_buf);
+                outstanding += std::exchange(_notifications, 0);
+                readers.splice(readers.cbegin(), _readers_buf); // <-- splicing avoids allocation in critical section
+                writers.splice(writers.cbegin(), _writers_buf); // <-- reverse order of submission since young are more likely to fire soon
+                excepters.splice(excepters.cbegin(), _excepters_buf);
                 while (!_timers_buf.empty()) {
                     timers.push(std::move(_timers_buf.top()));
                     _timers_buf.pop();
                 }
-                notifications_observed = std::exchange(_notifications, 0);
             }   // <-- unlock
 
             if (count && FD_ISSET(_pipe[0], &readset)) {
-                buf.reserve(std::max(notifications_observed, buf.capacity()));
-                [[maybe_unused]] ssize_t r = read(_pipe[0], buf.data(), notifications_observed);
-                assert(r > 0);
+                // we risk clearing notifications before we have observed their
+                // effects, so only read as many notifications (bytes) as we
+                // know have been sent
+                assert(outstanding > 0); // <-- else why is pipe readable?
+                buf.reserve(std::max(outstanding, buf.capacity())); // <-- undefined behavior?
+                ssize_t r = read(_pipe[0], buf.data(), outstanding);
+                if (r <= 0)
+                    (void) perror(strerror(errno)), abort();
+                assert(r <= outstanding);
+                outstanding -= r;
                 --count;
             } else {
                 FD_SET(_pipe[0], &readset);
@@ -224,7 +379,7 @@ struct reactor {
                         i = list.erase(i);
                         --count;
                     } else {
-                        assert(!FD_ISSET(fd, set));
+                        assert(!FD_ISSET(fd, set)); // <-- detects undercount
                         FD_SET(i->first, set);
                         maxfd = std::max(maxfd, i->first);
                         ++i;
@@ -237,7 +392,7 @@ struct reactor {
             pwriteset = process(writers, &writeset);
             pexceptset = process(excepters, &exceptset);
             
-            assert(count == 0);
+            assert(count == 0); // <-- detects overcount
             
             auto now = std::chrono::steady_clock::now();
             
@@ -246,7 +401,8 @@ struct reactor {
                 timers.pop();
             }
             if (!timers.empty()) {
-                auto usecs = std::chrono::duration_cast<std::chrono::microseconds>(timers.top().first - now).count();
+                auto usecs = std::chrono::duration_cast<std::chrono::
+                    microseconds>(timers.top().first - now).count();
                 timeout.tv_usec = (int) (usecs % 1'000'000);
                 timeout.tv_sec = usecs / 1'000'000;
                 ptimeout = &timeout;
