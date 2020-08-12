@@ -105,7 +105,22 @@ public:
     T fetch_sub(T x, std::memory_order order) const {
         return _atomic.fetch_sub(x, order);
     }
-    
+
+    T fetch_and(T, std::memory_order) = delete;
+    T fetch_and(T x, std::memory_order order) const {
+        return _atomic.fetch_and(x, order);
+    }
+
+    T fetch_or(T, std::memory_order) = delete;
+    T fetch_or(T x, std::memory_order order) const {
+        return _atomic.fetch_or(x, order);
+    }
+
+    T fetch_xor(T, std::memory_order) = delete;
+    T fetch_xor(T x, std::memory_order order) const {
+        return _atomic.fetch_xor(x, order);
+    }
+
     // escape hatch
     
     T& unsafe_reference() = delete;
@@ -285,9 +300,16 @@ struct fn {
     }
 
     fn(fn const&) = delete;
-    
+    fn(fn&) = delete;
     fn(fn&& other)
     : _value(std::exchange(other._value, 0)) {
+    }
+    
+    template<typename T, typename = std::void_t<decltype(std::declval<T>()())>>
+    fn(T f) {
+        auto p = new detail::wrapper<R, T>;
+        p->_payload.emplace(std::forward<T>(f));
+        _value = detail::CNT | val(p);
     }
     
     explicit fn(std::uint64_t value)
@@ -309,7 +331,11 @@ struct fn {
     detail::node<R>* get() {
         return detail::ptr<detail::node<R>>(_value);
     }
-    
+
+    detail::node<R> const* get() const {
+        return detail::ptr<const detail::node<R>>(_value);
+    }
+
     ~fn() {
         auto p = get();
         if (p) {
@@ -372,7 +398,11 @@ struct fn {
     detail::node<R>* operator->() {
         return get();
     }
-    
+
+    detail::node<R> const* operator->() const {
+        return get();
+    }
+
 };
 
 template<typename>
@@ -422,8 +452,8 @@ struct atomic<stack<fn<R>>> : detail::successible {
             while (auto q = detail::ptr<detail::node<R>>(p->_next))
                 p = q;
             p->_next = _next;
-            _next = x._value;
-            x._value = 0;
+            _next = x._next;
+            x._next = 0;
         }
     }
     
@@ -478,14 +508,14 @@ struct atomic<stack<fn<R>>> : detail::successible {
     }
     
     void splice(atomic x) const {
-        auto p = detail::ptr<detail::node<R>>(x._head._next);
+        auto p = detail::ptr<detail::node<R>>(x._next);
         if (p) {
             while (auto q = detail::ptr<detail::node<R>>(p->_next))
                 p = q;
             p->_next = _next.load(std::memory_order_relaxed);
-            while (!_next.compare_exchange_weak(p->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
+            while (!_next.compare_exchange_weak(p->_next, x._next, std::memory_order_release, std::memory_order_relaxed))
                 ;
-            x._value = 0;
+            x._next = 0;
         }
     }
     

@@ -16,12 +16,14 @@
 #include <thread>
 #include <vector>
 
+#include "fn.hpp"
+
 struct pool {
     
     std::mutex _mutex;
     std::condition_variable _ready;
     std::vector<std::thread> _threads;
-    std::list<std::function<void()>> _queue;
+    std::list<fn<void>> _queue;
     bool _cancelled;
     std::size_t _waiters;
     
@@ -88,7 +90,7 @@ struct pool {
         }
     }
     
-    void _submit_many(std::list<std::function<void()>>&& q) {
+    void _submit_many(std::list<fn<void>>&& q) {
         auto lock = std::unique_lock{_mutex};
         if (!_cancelled) {
             auto n = std::min(q.size(), _waiters);
@@ -111,7 +113,7 @@ struct pool {
         _get()._submit_one(std::forward<Callable>(f));
     }
     
-    static void submit_many(std::list<std::function<void()>>&& q) {
+    static void submit_many(std::list<fn<void>>&& q) {
         _get()._submit_many(std::move(q));
     }
         
