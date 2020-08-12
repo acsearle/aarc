@@ -14,14 +14,14 @@ TEST_CASE("fn", "[fn]") {
 
     {
         fn<void> a;
-        REQUIRE_FALSE(a);
+        REQUIRE_FALSE((bool) a);
     }
     {
         bool b = false;
         auto a = fn<bool>::from([&] {
             return b = true;
         });
-        REQUIRE(a);
+        REQUIRE(((bool) a));
         REQUIRE_FALSE(b);
         REQUIRE(a());
         REQUIRE_FALSE(a);
@@ -80,5 +80,21 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
         REQUIRE(b.pop()() == 2);
         REQUIRE(b.pop()() == 1);
         REQUIRE_FALSE(b.pop());
+    }
+    {
+        atomic<stack<fn<int>>> a;
+        for (int i = 0; i != 10; ++i) {
+            a.push(fn<int>::from([i] { return i; }));
+        }
+        int j = 9;
+        for (auto& b : a) {
+            REQUIRE(fn<int>(b.try_clone())() == j--);
+        }
+        a.reverse();
+        j = 0;
+        for (auto& b : a) {
+            REQUIRE(fn<int>(b.try_clone())() == j++);
+        }
+        REQUIRE(a.size() == 10);
     }
 }

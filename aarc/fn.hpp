@@ -160,7 +160,9 @@ inline std::uint64_t val(std::uint64_t n, void* p, std::uint64_t t) {
 
 struct successible {
     atomic<std::uint64_t> _next;
-    
+    successible() = default;
+    explicit successible(std::uint64_t x) : _next{x} {}
+    virtual ~successible() = default;
 };
 
 template<typename R>
@@ -308,7 +310,7 @@ struct fn {
         return fn(v);
     }
 
-    detail::node<R>* get() const {
+    detail::node<R>* get() {
         return detail::ptr<detail::node<R>>(_value);
     }
     
@@ -362,7 +364,7 @@ struct fn {
         return _value & detail::PTR;
     }
     
-    std::uint64_t tag() {
+    std::uint64_t tag() const {
         return _value & detail::TAG;
     }
     
@@ -371,7 +373,7 @@ struct fn {
         _value = (_value & ~detail::TAG) | t;
     }
     
-    detail::node<R>* operator->() const {
+    detail::node<R>* operator->() {
         return get();
     }
     
@@ -440,6 +442,20 @@ struct atomic<stack<fn<R>>> : detail::successible {
         return !(_next & detail::PTR);
     }
     
+    void reverse() {
+        atomic x;
+        while (!empty())
+            x.push(pop());
+        x.swap(*this);
+    }
+    
+    std::size_t size() {
+        std::size_t n = 0;
+        for (auto& x : *this)
+            ++n;
+        return n;
+    }
+    
     // const
         
     void store(atomic x) const {
@@ -475,7 +491,6 @@ struct atomic<stack<fn<R>>> : detail::successible {
         return atomic{_next.exchange(0, std::memory_order_acquire)};
     }
 
-    
     void wait() {
         _next.wait(0, std::memory_order_acquire);
     }
@@ -524,7 +539,7 @@ struct atomic<stack<fn<R>>> : detail::successible {
         }
         
         bool operator!=(sentinel) {
-            return detail::ptr<detail::node<R>>(_ptr->_next)->_next & detail::PTR;
+            return _ptr->_next & detail::PTR;
         }
         
         bool operator==(sentinel) {
