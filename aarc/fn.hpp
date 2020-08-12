@@ -56,60 +56,59 @@ public:
     
     // const-qualified
     
+    T load(std::memory_order) = delete; // <-- provide deleted mutable overloads to trap misuse of const methods
     T load(std::memory_order order) const {
         return _atomic.load(order);
     }
     
+    T store(T, std::memory_order) = delete;
     void store(T x, std::memory_order order) const {
         _atomic.store(x, order);
     }
     
+    T exchange(T, std::memory_order) = delete;
     T exchange(T x, std::memory_order order) const {
         return _atomic.exchange(order);
     }
     
+    bool compare_exchange_weak(T&, T, std::memory_order, std::memory_order) = delete;
     bool compare_exchange_weak(T& expected, T desired, std::memory_order success, std::memory_order failure) const {
         return _atomic.compare_exchange_weak(expected, desired, success, failure);
     }
 
+    bool compare_exchange_strong(T&, T, std::memory_order, std::memory_order) = delete;
     bool compare_exchange_strong(T& expected, T desired, std::memory_order success, std::memory_order failure) const {
         return _atomic.compare_exchange_strong(expected, desired, success, failure);
     }
     
+    void wait(T, std::memory_order) noexcept = delete;
     void wait(T old, std::memory_order order) const noexcept {
         std::atomic_wait_explicit(&_atomic, old, order);
     }
     
+    void notify_one() noexcept = delete;
     void notify_one() const noexcept {
         std::atomic_notify_one(&_atomic);
     }
     
+    void notify_all() noexcept = delete;
     void notify_all() const noexcept {
         std::atomic_notify_all(*_atomic);
     }
     
+    T fetch_add(T, std::memory_order) = delete;
     T fetch_add(T x, std::memory_order order) const {
         return _atomic.fetch_add(x, order);
     }
     
+    T fetch_sub(T, std::memory_order) = delete;
     T fetch_sub(T x, std::memory_order order) const {
         return _atomic.fetch_sub(x, order);
     }
     
-    T fetch_and(T x, std::memory_order order) const {
-        return _atomic.fetch_and(x, order);
-    }
-
-    T fetch_or(T x, std::memory_order order) const {
-        return _atomic.fetch_or(x, order);
-    }
-    
-    T fetch_xor(T x, std::memory_order order) const {
-        return _atomic.fetch_xor(x, order);
-    }
-
     // escape hatch
     
+    T& unsafe_reference() = delete;
     T& unsafe_reference() const {
         return const_cast<T&>(_value);
     }
@@ -160,9 +159,6 @@ inline std::uint64_t val(std::uint64_t n, void* p, std::uint64_t t) {
 
 struct successible {
     atomic<std::uint64_t> _next;
-    successible() = default;
-    explicit successible(std::uint64_t x) : _next{x} {}
-    virtual ~successible() = default;
 };
 
 template<typename R>
@@ -317,7 +313,7 @@ struct fn {
     ~fn() {
         auto p = get();
         if (p) {
-            assert(detail::cnt(_value) == p->_count.load(std::memory_order_relaxed));
+            assert(detail::cnt(_value) == p->_count);
             p->erase_and_delete();
         }
     }
@@ -349,7 +345,7 @@ struct fn {
     R operator()() {
         auto p = detail::ptr<detail::node<R>>(_value);
         assert(p);
-        assert(detail::cnt(_value) == p->_count.load(std::memory_order_relaxed));
+        assert(detail::cnt(_value) == p->_count);
         _value = 0;
         if constexpr (std::is_same_v<R, void>) {
             p->call_and_erase_and_delete();
@@ -451,17 +447,23 @@ struct atomic<stack<fn<R>>> : detail::successible {
     
     std::size_t size() {
         std::size_t n = 0;
-        for (auto& x : *this)
+        for ([[maybe_unused]] auto& _ : *this)
             ++n;
         return n;
     }
     
+    void clear() {
+        atomic{}.swap(*this);
+    }
+    
     // const
         
+    void store(atomic) = delete;
     void store(atomic x) const {
         exchange(std::move(x));
     }
     
+    atomic exchange(atomic x) = delete;
     atomic exchange(atomic x) const {
         return atomic{_next.exchange(std::exchange(x._head._next, 0), std::memory_order_acq_rel)};
     }
@@ -487,27 +489,31 @@ struct atomic<stack<fn<R>>> : detail::successible {
         }
     }
     
+    atomic take() = delete;
     atomic take() const {
         return atomic{_next.exchange(0, std::memory_order_acquire)};
     }
 
-    void wait() {
+    void wait() = delete;
+    void wait() const {
         _next.wait(0, std::memory_order_acquire);
     }
     
-    void notify_one() {
+    void notify_one() = delete;
+    void notify_one() const {
         _next.notify_one();
     }
 
-    void notify_all() {
+    void notify_all() = delete;
+    void notify_all() const {
         _next.notify_all();
     }
 
+    atomic& unsafe_reference() = delete;
     atomic& unsafe_reference() const {
         return const_cast<atomic&>(*this);
     }
-    
-    
+        
     // iterators
     
     struct iterator {
@@ -518,8 +524,15 @@ struct atomic<stack<fn<R>>> : detail::successible {
         
         iterator& operator++() {
             assert(_ptr);
-            _ptr = detail::ptr<detail::successible>(_ptr->_next);
+            _ptr = detail::ptr<detail::node<R>>(_ptr->_next);
             return *this;
+        }
+        
+        iterator operator++(int) {
+            assert(_ptr);
+            iterator tmp{_ptr};
+            _ptr = detail::ptr<detail::node<R>>(_ptr->_next);
+            return tmp;
         }
         
         detail::node<R>& operator*() {
@@ -550,6 +563,24 @@ struct atomic<stack<fn<R>>> : detail::successible {
     
     iterator begin() { return iterator{this}; }
     typename iterator::sentinel end() { return typename iterator::sentinel{}; }
+    
+    // erases element pointed to by iterator
+    // after erasure, same iterator points at element after erased element
+    fn<R> erase(iterator it) {
+        fn<R> f{it._ptr->_next};
+        auto p = detail::ptr<detail::node<R>>(it._ptr->_next);
+        assert(p);
+        it._ptr->_next = p->_next;
+        return f;
+    }
+    
+    // inserts before element pointed to by iterator
+    // after insertion, points at inserted element
+    void insert(iterator it, fn<R> x) {
+        x->_next = it._ptr->_next;
+        it._ptr->_next = x._value;
+        x._value = 0;
+    }
 
 };
 
