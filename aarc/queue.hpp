@@ -1,22 +1,20 @@
 //
-//  async_semaphore.hpp
+//  queue.hpp
 //  aarc
 //
-//  Created by Antony Searle on 18/7/20.
+//  Created by Antony Searle on 12/8/20.
 //  Copyright © 2020 Antony Searle. All rights reserved.
 //
 
-#ifndef async_semaphore_hpp
-#define async_semaphore_hpp
+#ifndef queue_hpp
+#define queue_hpp
 
-#include <stdio.h>
+#include "atomic.hpp"
+#include "accountant.hpp"
+#include "maybe.hpp"
 
-#include "aarc.hpp"
-
-
-
-
-struct AsyncSemaphore {
+template<typename T>
+struct Queue {
     
     static constexpr std::uint64_t LO = 0x0000'FFFF'FFFF'FFFF;
     static constexpr std::uint64_t HI = 0xFFFF'0000'0000'0000;
@@ -26,33 +24,21 @@ struct AsyncSemaphore {
         
         std::atomic<std::int64_t> _count;
         std::atomic<std::uint64_t> _next; // changes from zero to next node and then immutable
+        maybe<T> _payload;
         Accountant _auditor;
         
-        Node() : _count{0x0000'0000'0002'0000}, _next{0} {}
-        virtual ~Node() = default;
-        virtual void operator()() { assert(false); /* sentinel was executed */ };
-        
-    };
-    
-    template<typename T>
-    struct Task : Node {
-        maybe<T> _payload;
-        
-        virtual void operator()() override {
-            (*_payload)();
-            _payload.erase();
-        }
-        
+        inline static std::atomic<std::int64_t> _extant = 0;
+
     };
     
     std::atomic<std::uint64_t> _head;
     std::atomic<std::uint64_t> _tail;
     
-    AsyncSemaphore()
-    : AsyncSemaphore{HI | (std::uint64_t) new Node} {
+    Queue()
+    : Queue{HI | (std::uint64_t) new Node{0x0000'0000'0002'0000, 0}} {
     }
     
-    explicit AsyncSemaphore(std::uint64_t sentinel)
+    explicit Queue(std::uint64_t sentinel)
     : _head{sentinel}, _tail{sentinel} {
     }
         
@@ -66,18 +52,20 @@ struct AsyncSemaphore {
         }
     }
     
-    template<typename Callable>
-    void wait_async(Callable&& f) {
-        std::uint64_t z;
-        {
-            auto ptr = new Task<std::decay_t<Callable>>;
-            ptr->_payload.emplace(std::forward<Callable>(f));
-            z = 0xFFFE'0000'0000'0000 | (std::uint64_t) ptr;
-        }
-        Node* ptr;
+    template<typename... Args>
+    void push(Args&&... args) {
+        Node* ptr = new Node{0x0000'0000'0002'0000, 0};
+        // nodes are created with
+        //     weight MAX-1 to be installed in tail
+        //   + weight     1 to be awarded to the tail installing thread
+        //   + weight MAX-1 to be installed in head
+        //   + weight     1 to be awarded to the head installing thread
+        ptr->_payload.emplace(std::forward<Args>(args)...);
+        std::uint64_t z = 0xFFFE'0000'0000'0000 | (std::uint64_t) ptr;
+        ptr = nullptr;
         std::uint64_t a = _tail.load(std::memory_order_relaxed);
-        std::uint64_t b;
-        std::uint64_t c;
+        std::uint64_t b = 0;
+        std::uint64_t c = 0;
         for (;;) {
             // _tail will always be a valid pointer (points to sentinel when queue is empty)
             assert(a & LO);
@@ -106,22 +94,6 @@ struct AsyncSemaphore {
                     return;
                     
                 } while (!c);
-                // c is not null
-                
-                
-                // fixme: interleave instead
-                while (!(c & LO) && (c & HI)) {
-                    // try and decrement
-                    if (_tail.compare_exchange_weak(c, c - ST, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                        _release(ptr, 1);
-                        ptr = (Node*) (z & LO);
-                        (*ptr)();
-                        _release(ptr, 0x2'000);
-                        return;
-                    }
-                }
-                
-                
                 // we failed to install the node and instead must swing tail to next
                 do if (_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
                     // we swung tail and are awarded one unit of ownership
@@ -140,7 +112,7 @@ struct AsyncSemaphore {
         }
     }
     
-    void notify() {
+    bool try_pop(T& x) {
         std::uint64_t a = _head.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
         Node* ptr = nullptr;
@@ -154,121 +126,48 @@ struct AsyncSemaphore {
                 // we can now read _head->_next
                 ptr = (Node*) (b & LO);
                 c = ptr->_next.load(std::memory_order_acquire);
-                do if (c & LO) {
+                if (c & LO) {
 
                     do if (_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
                         // we installed _head and have one unit of ownership of the new head node
                         _release(ptr, (b >> 48) + 2); // release old head node
                         ptr = (Node*) (c & LO);
-                        (*ptr)();
+                        x = std::move(*ptr->_payload);
+                        ptr->_payload.erase();
                         _release(ptr, 1); // release new head node
-                        return;
+                        return true;
                     } while ((b & LO) == (a & LO));
                     // somebody else swung the head, release the old one
                     _release(ptr, 1);
                     // start over with new head we just read
                     a = b;
-                    break;
                 } else {
-
                     // queue is empty
-                    do if (ptr->_next.compare_exchange_weak(c, c + ST, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                        // increment the semaphore
-                        do if (_head.compare_exchange_weak(b, b + ST, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                            // we put back the local weight we took
-                            return;
-                        } while ((b & LO) == (a & LO));
-                        // head was changed before we could return weight, so we put weight back to global count
-                        _release(ptr, 1);
-                        return;
-                    } while (!(c & LO));
-                    
-                } while (true);
+                    do if (_head.compare_exchange_weak(b, b + ST, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                        // we put back the local weight we took
+                        return false;
+                    } while ((b & LO) == (a & LO));
+                    // head was changed before we could return weight, so we put weight back to global count
+                    _release(ptr, 1);
+                    return false;
+                }
             }
             // failed to acquire head, try again
         }
     }
                     
-    ~AsyncSemaphore() {
+    ~Queue() {
         
         // destroy all unpopped nodes
         // tail can lag head which makes things a bit tricky
-        
+
+        T x;
+        while (try_pop(x))
+            ;
+
         
     }
-    
     
 };
 
-
-/*
-struct async_semaphore {
-    
-    // queue of tasks with additional empty states
-    //
-    // +3 +2 +1 0 item item item
-    
-    
-    
-    struct Node {
-        
-        std::atomic<std::int64_t> _count;
-        std::atomic<std::uintptr_t> _next;
-        
-        virtual void operator()() {}
-        virtual ~Node() = default;
-        
-    };
-    
-    template<typename Callable>
-    struct Task : Node {
-        Callable _f;
-        virtual void operator()() {
-            _f();
-        }
-    };
-
-    std::atomic<std::uintptr_t> _head;
-
-    constexpr static std::uintptr_t HI = 0xFFFF'0000'0000'0000;
-    constexpr static std::uintptr_t LO = 0x0000'FFFF'FFFF'FFFF;
-    constexpr static std::uintptr_t ST = 0x0001'0000'0000'0000;
-    
-    void _release(Node* ptr, std::intptr_t count);
-    
-    void notify() {
-        std::uintptr_t a = _head.load(std::memory_order_relaxed);
-        for (;;) {
-            assert(a & LO);
-            std::uintptr_t b = a + ST;
-            if (!_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
-                Node* ptr = (Node*) (b & LO);
-                std::uintptr_t c = ptr->_next.load(std::memory_order_acquire);
-                if (c & LO) {
-                    // pop item
-                } else {
-                    // queue is empty
-                    if (ptr->_next.compare_exchange_weak(c, c + ST)) {
-                        // attempt to replenish head
-                        return;
-                    }
-                }
-            }
-        }
-        
-    }
-
-    template<typename T>
-    void wait_async(T&& x) {
-        
-    }
-    
-    
-    
-    
-    
-};
-
-*/
-
-#endif /* async_semaphore_hpp */
+#endif /* queue_hpp */

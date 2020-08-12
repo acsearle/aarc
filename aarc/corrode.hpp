@@ -11,9 +11,10 @@
 
 #include <experimental/coroutine>
 
+#include "maybe.hpp"
+#include "pool.hpp"
 
-
-//  forever
+//  await forever
 //
 //  an awaitable that never calls (and immediately destroys) its continuation
 
@@ -25,6 +26,18 @@ inline constexpr struct {
     void await_resume() const { std::terminate(); };
 } forever;
 
+// await transfer to another thread
+//
+// dispatches its continuation to the thread pool
+
+inline constexpr struct  {
+    bool await_ready() const { return false; }
+    template<typename Promise>
+    void await_suspend(std::experimental::coroutine_handle<Promise> h) const {
+        pool::submit_one(std::move(h));
+    }
+    void await_resume() const {};
+} transfer;
 
 
 //  promise for a void-returning coroutine
@@ -37,7 +50,7 @@ inline constexpr struct {
 //          printf("read %td\n", n);
 //      }
 
-struct eager_task_promise {
+struct promise_nothing {
     
     void get_return_object() {}
     auto initial_suspend() { return std::experimental::suspend_never{}; }
@@ -50,7 +63,7 @@ struct eager_task_promise {
 namespace std::experimental {
 
 template<typename... Args>
-struct coroutine_traits<void, Args...> { using promise_type = eager_task_promise; };
+struct coroutine_traits<void, Args...> { using promise_type = promise_nothing; };
 
 }
 
@@ -60,7 +73,7 @@ struct future {
     struct promise_type {
         
         std::experimental::coroutine_handle<> _continuation;
-        T _value;
+        maybe<T> _value;
         
         auto get_return_object() {
             return future<T>{
@@ -68,7 +81,7 @@ struct future {
             };
         }
         auto initial_suspend() { return std::experimental::suspend_always{}; } // <-- do we really want to be lazy?
-        void return_value(T x) { _value = std::move(x); }
+        void return_value(T x) { _value.emplace(std::move(x)); }
         
         struct final_awaitable {
             
@@ -96,7 +109,7 @@ struct future {
     }
     
     T await_resume() {
-        return _continuation.promise()._value;
+        return std::move(_continuation.promise()._value.get());
     }
     
 };

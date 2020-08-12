@@ -20,7 +20,7 @@
 #include <stack>
 #include <thread>
 
-#include "fn.hpp"
+#include "stack.hpp"
 #include "pool.hpp"
 
 struct reactor {
@@ -40,14 +40,7 @@ struct reactor {
     
     // single thread that performs all file descriptor and timed waits
     std::thread _thread;
-    
-    // mutex held when not in select
-    // std::mutex _mutex;
-    
-    // one-time cancellation
-    // bool _cancelled;
-    // std::atomic<std::size_t> _cancelled_and_notifications;
-    
+        
     // recently-added waiters buffer
     using LIST = atomic<stack<fn<void>>>;
     alignas(64) LIST _readers_buf;
@@ -70,6 +63,7 @@ struct reactor {
     }
     
     void _notify() const {
+        printf("reactor::_notify()\n");
         unsigned char c{0};
         if (write(_pipe[1], &c, 1) != 1)
             (void) perror(strerror(errno)), abort();
@@ -110,8 +104,8 @@ struct reactor {
     void _run() const {
         
         struct cmp_t {
-            bool operator()(fn<void>& a,
-                            fn<void>& b) {
+            bool operator()(const fn<void>& a,
+                            const fn<void>& b) {
                 return a->_t > b->_t; // <-- reverse order puts earliest at top of priority queue
             }
         };
@@ -145,26 +139,24 @@ struct reactor {
         for (;;) {
             
             {
-                // auto lock = std::unique_lock{_mutex}; // <-- briefly lock to update state
-                
-                {
-                    auto stale = _cancelled_and_notifications.fetch_and(CANCELLED_BIT, std::memory_order_acquire);
-                    if (stale & CANCELLED_BIT)
-                        break;
-                    outstanding += stale;
-                    assert(outstanding >= stale);
-                }
-                
-                readers.splice(_readers_buf.take()); // <-- splicing avoids allocation in critical section
-                writers.splice(_writers_buf.take()); // <-- reverse order of submission since young are more likely to fire soon
-                excepters.splice(_excepters_buf.take());
-                {
-                    auto stale = _timers_buf.take();
-                    while (!stale.empty())
-                        timers.push(stale.pop());
-                }
-            }   // <-- unlock
-
+                // establish an ordering between this read and the writes that preceeded notifications
+                auto stale = _cancelled_and_notifications.fetch_and(CANCELLED_BIT, std::memory_order_acquire);
+                if (stale & CANCELLED_BIT)
+                    break;
+                outstanding += stale;
+                assert(outstanding >= stale);
+            }
+            
+            readers.splice(_readers_buf.take());
+            writers.splice(_writers_buf.take());
+            excepters.splice(_excepters_buf.take());
+            
+            {
+                auto stale = _timers_buf.take();
+                while (!stale.empty())
+                    timers.push(stale.pop());
+            }
+            
             if (count && FD_ISSET(_pipe[0], &readset)) {
                 // we risk clearing notifications before we have observed their
                 // effects, so only read as many notifications (bytes) as we
@@ -176,6 +168,7 @@ struct reactor {
                     (void) perror(strerror(errno)), abort();
                 assert(r <= outstanding);
                 outstanding -= r;
+                printf("outstanding notifications %llu\n", outstanding);
                 --count;
             } else {
                 FD_SET(_pipe[0], &readset);
@@ -224,8 +217,10 @@ struct reactor {
             if (!pending.empty())
                 pool::submit_many(std::move(pending));
 
+            printf("sleeping\n");
             count = select(maxfd + 1, &readset, pwriteset, pexceptset, ptimeout);
-            
+            printf("woke (%d)\n", count);
+
             if (count == -1) {
                 perror(strerror(errno));
                 abort();

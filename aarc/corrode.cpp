@@ -33,27 +33,11 @@ TEST_CASE("await-forever", "[await]") {
     
 }
 
-struct transfer {
-    
-    bool await_ready() {
-        return false;
-    }
-    
-    template<typename Promise>
-    void await_suspend(std::experimental::coroutine_handle<Promise> h) {
-        pool::submit_one(std::move(h));
-    }
-    
-    void await_resume() {
-    };
-    
-};
-
 TEST_CASE("await-transfer", "[transfer]") {
 
     std::promise<std::thread::id> p;
     [&]() -> void {
-        co_await transfer{}; // continue on pool thread
+        co_await transfer; // continue on pool thread
         p.set_value(std::this_thread::get_id());
     }();
     REQUIRE(p.get_future().get() != std::this_thread::get_id());
@@ -133,7 +117,7 @@ TEST_CASE("await-future", "[await]") {
         printf("a\n");
         int i = co_await []() -> future<int> {
             printf("b\n");
-            co_await transfer{};
+            co_await transfer;
             printf("c\n");
             co_return 7;
         }();

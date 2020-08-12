@@ -14,19 +14,25 @@
 template<typename T>
 struct maybe {
     
-    alignas(T) unsigned char raw[sizeof(T)];
+    alignas(T) unsigned char _value[sizeof(T)];
     
     template<typename... Args>
     void emplace(Args&&... args) {
-        new (raw) T(std::forward<Args>(args)...);
+        new ((void*) _value) T(std::forward<Args>(args)...);
     }
     
     void erase() const {
-        reinterpret_cast<T const*>(raw)->~T();
+        (*this)->~T();
     }
     
-    T& get() { return reinterpret_cast<T&>(*raw); }
-    T const& get() const { return reinterpret_cast<T const&>(*raw); }
+    T& get() { return reinterpret_cast<T&>(*_value); }
+    T const& get() const { return reinterpret_cast<T const&>(*_value); }
+    
+    T* operator->() { return reinterpret_cast<T*>(_value); }
+    T const* operator->() const { return reinterpret_cast<T const*>(_value); }
+    
+    T& operator*() { return reinterpret_cast<T&>(*_value); }
+    T const& operator*() const { return reinterpret_cast<T const&>(*_value); }
 
 };
 
