@@ -14,16 +14,16 @@
 #include "maybe.hpp"
 
 template<typename T>
-struct Queue {
+struct queue {
     
     static constexpr std::uint64_t LO = 0x0000'FFFF'FFFF'FFFF;
     static constexpr std::uint64_t HI = 0xFFFF'0000'0000'0000;
     static constexpr std::uint64_t ST = 0x0001'0000'0000'0000;
     
-    struct Node {
+    struct node {
         
         std::atomic<std::int64_t> _count;
-        std::atomic<std::uint64_t> _next; // changes from zero to next node and then immutable
+        std::atomic<std::uint64_t> _next; // changes from zero to next node and thereafter immutable
         maybe<T> _payload;
         Accountant _auditor;
         
@@ -34,15 +34,15 @@ struct Queue {
     std::atomic<std::uint64_t> _head;
     std::atomic<std::uint64_t> _tail;
     
-    Queue()
-    : Queue{HI | (std::uint64_t) new Node{0x0000'0000'0002'0000, 0}} {
+    queue()
+    : queue{HI | (std::uint64_t) new node{0x0000'0000'0002'0000, 0}} {
     }
     
-    explicit Queue(std::uint64_t sentinel)
+    explicit queue(std::uint64_t sentinel)
     : _head{sentinel}, _tail{sentinel} {
     }
         
-    static void _release(Node* ptr, std::int64_t n) {
+    static void _release(node* ptr, std::int64_t n) {
         auto m = ptr->_count.fetch_sub(n, std::memory_order_release);
         assert(m >= n);
         if (m == n) {
@@ -54,7 +54,7 @@ struct Queue {
     
     template<typename... Args>
     void push(Args&&... args) {
-        Node* ptr = new Node{0x0000'0000'0002'0000, 0};
+        node* ptr = new node{0x0000'0000'0002'0000, 0};
         // nodes are created with
         //     weight MAX-1 to be installed in tail
         //   + weight     1 to be awarded to the tail installing thread
@@ -74,7 +74,7 @@ struct Queue {
             if (_tail.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 // we take partial ownership of _tail and can dereference it
             alpha:
-                ptr = (Node*) (b & LO);
+                ptr = (node*) (b & LO);
                 c = 0;
                 do if (ptr->_next.compare_exchange_weak(c, z, std::memory_order_release, std::memory_order_acquire)) {
                     // we installed a new node
@@ -112,10 +112,14 @@ struct Queue {
         }
     }
     
+    
+    
+    
+    
     bool try_pop(T& x) {
         std::uint64_t a = _head.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
-        Node* ptr = nullptr;
+        node* ptr = nullptr;
         std::uint64_t c = 0;
         for (;;) {
             // _head always points to the sentinel before the (potentially empty) queue
@@ -124,14 +128,14 @@ struct Queue {
             b = a - ST;
             if (_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 // we can now read _head->_next
-                ptr = (Node*) (b & LO);
+                ptr = (node*) (b & LO);
                 c = ptr->_next.load(std::memory_order_acquire);
                 if (c & LO) {
 
                     do if (_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
                         // we installed _head and have one unit of ownership of the new head node
                         _release(ptr, (b >> 48) + 2); // release old head node
-                        ptr = (Node*) (c & LO);
+                        ptr = (node*) (c & LO);
                         x = std::move(*ptr->_payload);
                         ptr->_payload.erase();
                         _release(ptr, 1); // release new head node
@@ -155,8 +159,13 @@ struct Queue {
             // failed to acquire head, try again
         }
     }
-                    
-    ~Queue() {
+         
+    
+    
+    
+    
+    
+    ~queue() {
         
         // destroy all unpopped nodes
         // tail can lag head which makes things a bit tricky

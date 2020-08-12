@@ -14,7 +14,7 @@
 
 TEST_CASE("Queue") {
 
-    Queue<int> a;
+    queue<int> a;
     
     auto N = 1'000;
     auto M = 16;

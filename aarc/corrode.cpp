@@ -44,46 +44,6 @@ TEST_CASE("await-transfer", "[transfer]") {
 }
 
 
-struct async_read {
-    
-    int _fd;
-    void* _buf;
-    size_t _count;
-    ssize_t _return_value;
-    
-    async_read(int fd, void* buf, size_t count)
-    : _fd(fd)
-    , _buf(buf)
-    , _count(count) {
-    }
-
-    void _execute() {
-        _return_value = read(_fd, _buf, _count);
-        assert(_return_value > 0);
-    }
-
-    bool await_ready() {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(_fd, &readfds);
-        timeval t{0, 0};
-        return ((select(_fd + 1, &readfds, nullptr, nullptr, &t) == 1)
-                && ((void) _execute(), true));
-    }
-    
-    void await_suspend(std::experimental::coroutine_handle<> handle) {
-        reactor::get().when_readable(_fd, [=]() mutable {
-            _execute();
-            handle();
-        });
-    }
-    
-    ssize_t await_resume() {
-        return _return_value;
-    }
-    
-};
-
 TEST_CASE("await-read", "[await]") {
     
     int p[2];
@@ -135,87 +95,6 @@ void foo() {
     co_return;
 }
 
-struct promise_lazy;
-struct lazy;
-
-struct promise_lazy {
-    
-    std::experimental::coroutine_handle<> continuation;
-    
-    struct final_await {
-        bool await_ready() { return false; }
-        auto await_suspend(std::experimental::coroutine_handle<promise_lazy> h) {
-            // h is now the end of the function and does nothing
-            return h.promise().continuation;
-        }
-        void await_resume() {};
-    };
-    
-    lazy get_return_object();
-    auto initial_suspend() { return std::experimental::suspend_always{}; }
-    void return_void() {}
-    auto final_suspend() { return final_await{}; }
-    void unhandled_exception() {}
-};
-
-struct lazy {
-    promise_lazy* ptr;
-    using promise_type = promise_lazy;
-    bool await_ready() { return false; }
-    template<typename U>
-    auto await_suspend(std::experimental::coroutine_handle<U> u) {
-        ptr->continuation = u;
-        return std::experimental::coroutine_handle<promise_type>::from_promise(*ptr);
-    }
-    void await_resume() {}
-};
-
-lazy promise_lazy::get_return_object() { return lazy{this}; }
-
-
-
-
-lazy bar() {
-    printf("inside bar\n");
-    co_return;
-}
-
-lazy car() {
-    printf("inside car\n");
-    co_return;
-}
-
-lazy foo2() {
-    printf("before bar\n");
-    co_await bar();
-    printf("after bar\n");
-}
-
-lazy foo2a() {
-    printf("before car\n");
-    co_await car();
-    printf("after car\n");
-}
-
-
-void foo3() {
-    auto x = foo2();
-    printf("before foo2\n");
-    co_await x;
-    printf("after foo2\n");
-    printf("before foo2a\n");
-    co_await foo2a();
-    printf("after foo2a\n");
-}
-
-
-
-TEST_CASE("foo") {
-    auto x = foo3;
-    printf("proof of laziness?\n");
-    x();
-}
-
 
 /*
 template<typename Rep, typename Period>
@@ -238,81 +117,7 @@ await_duration<Rep, Period> operator co_await(std::chrono::duration<Rep, Period>
     return await_duration<Rep, Period>(std::move(t));
 }
 
-struct promise_void {
-    void get_return_object() {}
-    std::experimental::suspend_never initial_suspend() { return std::experimental::suspend_never{}; }
-    void return_void() {}
-    std::experimental::suspend_never final_suspend() { return std::experimental::suspend_never{}; }
-    void unhandled_exception() {}
-};
 
-namespace std::experimental {
-template<typename... Args> struct coroutine_traits<void, Args...> {
-    using promise_type = promise_void;
-};
-}
-
-template<typename T>
-struct promise;
-
-template<typename T>
-struct future {
-    using promise_type = promise<T>;
-    std::future<T> _future;
-    
-    //T get() { return _future.get(); } // blocking
-    
-    bool await_ready() {
-        return _future.wait_for(std::chrono::seconds::zero()) == std::future_status::ready;
-    }
-    
-    template<typename U>
-    void await_suspend(std::experimental::coroutine_handle<U> h) {
-        std::thread([h]() mutable {
-            h.resume();
-        }).detach();
-    }
-    
-    T await_resume() {
-        return _future.get();
-    }
-    
-    
-};
-
-template<typename T>
-struct promise {
-    std::promise<T> _promise;
-    future<T> get_return_object() {
-        return future<T>{_promise.get_future()};
-    }
-    auto initial_suspend() { return std::experimental::suspend_never{}; }
-    void return_value(T x) { _promise.set_value(std::move(x)); }
-    auto final_suspend() { return std::experimental::suspend_never{}; }
-    void unhandled_exception() { _promise.set_exception(std::current_exception()); }
-};
-
-
-future<int> foo() {
-    printf("enter foo\n");
-    co_await std::chrono::seconds(1);
-    printf("return from foo\n");
-    co_return 7;
-}
-
-void bar2() {
-    int x = co_await foo();
-    printf("%d\n", x);
-}
-
-TEST_CASE("df") {
-    bar2();
-    //printf("%d\n", foo().get());
-}
-*/
-
-
-/*
 template<typename Rep, typename Period>
 struct await_duration {
     std::chrono::duration<Rep, Period> _t;
@@ -347,25 +152,6 @@ struct await_time_point {
     }
     void await_resume() {}
 };
-
-struct promise {
-    void get_return_object() {}
-    std::experimental::suspend_never initial_suspend() { return std::experimental::suspend_never{}; }
-    void return_void() {}
-    std::experimental::suspend_never final_suspend() { return std::experimental::suspend_never{}; }
-    void unhandled_exception() {}
-};
-
-namespace std::experimental {
-template<typename... Args> struct coroutine_traits<void, Args...> {
-    using promise_type = promise;
-};
-}
-
-void boo() {
-    co_await std::chrono::seconds(1);
-    printf("boo!\n");
-}
 
 struct await_read {
     int _fd;

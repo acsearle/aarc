@@ -12,7 +12,7 @@
 #include <experimental/coroutine>
 
 #include "maybe.hpp"
-#include "pool.hpp"
+#include "reactor.hpp"
 
 //  await forever
 //
@@ -66,6 +66,47 @@ template<typename... Args>
 struct coroutine_traits<void, Args...> { using promise_type = promise_nothing; };
 
 }
+
+struct async_read {
+    
+    int _fd;
+    void* _buf;
+    size_t _count;
+    ssize_t _return_value;
+    
+    async_read(int fd, void* buf, size_t count)
+    : _fd(fd)
+    , _buf(buf)
+    , _count(count) {
+    }
+
+    void _execute() {
+        _return_value = read(_fd, _buf, _count);
+        assert(_return_value > 0);
+    }
+
+    bool await_ready() {
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(_fd, &readfds);
+        timeval t{0, 0};
+        return ((select(_fd + 1, &readfds, nullptr, nullptr, &t) == 1)
+                && ((void) _execute(), true));
+    }
+    
+    void await_suspend(std::experimental::coroutine_handle<> handle) {
+        reactor::get().when_readable(_fd, [=]() mutable {
+            _execute();
+            handle();
+        });
+    }
+    
+    ssize_t await_resume() {
+        return _return_value;
+    }
+    
+};
+
 
 template<typename T = void>
 struct future {

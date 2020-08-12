@@ -143,46 +143,4 @@ struct Aarc {
 
 
 
-
-
-
-
-struct Z {
-    
-    std::atomic<std::int64_t> _count;
-    
-};
-
-template<typename F>
-void thing(std::atomic<std::uint64_t>& a, F&& f) {
-    
-    // read a pointer, subtract weight, dereference the pointer, replace the pointer with something from deref
-    
-    std::uint64_t b = a.load(std::memory_order_relaxed);
-    
-    while ((b & 0xFFFF'0000'0000'0000)) {
-
-        std::uint64_t c = b - 0x0001'0000'0000'0000;
-
-        if (a.compare_exchange_weak(b, c, std::memory_order_acquire, std::memory_order_relaxed)) {
-            
-            Z* d = (Z*) (c & 0x0000'FFFF'FFFF'FFFF);
-            
-            auto e = f(d);
-            
-            do if (a.compare_exchange_weak(c, e, std::memory_order_release, std::memory_order_relaxed)) {
-                
-                // ?
-                
-            } while (!((c ^ e) & 0x0000'FFFF'FFFF'FFFF));
-            
-        }
-        
-    }
-    
-    
-}
-
-
-
 #endif /* aarc_hpp */
