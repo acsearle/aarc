@@ -97,9 +97,11 @@ struct pool {
             if (n) {
                 _queue.splice(_queue.end(), std::move(q));
                 lock.unlock();
-                if (n > 1)
-                    _ready.notify_all();
-                else
+                //if (n > 1)
+                //    _ready.notify_all();
+                //else
+                //    _ready.notify_one();
+                while (n--)
                     _ready.notify_one();
             }
         } else {

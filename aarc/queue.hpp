@@ -22,17 +22,14 @@ struct queue {
     
     struct node {
         
-        std::atomic<std::int64_t> _count;
-        std::atomic<std::uint64_t> _next; // changes from zero to next node and thereafter immutable
+        atomic<std::int64_t> _count;
+        atomic<std::uint64_t> _next; // changes from zero to next node and thereafter immutable
         maybe<T> _payload;
-        Accountant _auditor;
-        
-        inline static std::atomic<std::int64_t> _extant = 0;
 
     };
     
-    std::atomic<std::uint64_t> _head;
-    std::atomic<std::uint64_t> _tail;
+    atomic<std::uint64_t> _head;
+    atomic<std::uint64_t> _tail;
     
     queue()
     : queue{HI | (std::uint64_t) new node{0x0000'0000'0002'0000, 0}} {
@@ -42,7 +39,7 @@ struct queue {
     : _head{sentinel}, _tail{sentinel} {
     }
         
-    static void _release(node* ptr, std::int64_t n) {
+    static void _release(node const* ptr, std::int64_t n) {
         auto m = ptr->_count.fetch_sub(n, std::memory_order_release);
         assert(m >= n);
         if (m == n) {
@@ -53,16 +50,17 @@ struct queue {
     }
     
     template<typename... Args>
-    void push(Args&&... args) {
-        node* ptr = new node{0x0000'0000'0002'0000, 0};
+    void push(Args&&... args) const {
+        node* ptr_mut = new node{0x0000'0000'0002'0000, 0};
         // nodes are created with
         //     weight MAX-1 to be installed in tail
         //   + weight     1 to be awarded to the tail installing thread
         //   + weight MAX-1 to be installed in head
         //   + weight     1 to be awarded to the head installing thread
-        ptr->_payload.emplace(std::forward<Args>(args)...);
-        std::uint64_t z = 0xFFFE'0000'0000'0000 | (std::uint64_t) ptr;
-        ptr = nullptr;
+        ptr_mut->_payload.emplace(std::forward<Args>(args)...);
+        std::uint64_t z = 0xFFFE'0000'0000'0000 | (std::uint64_t) ptr_mut;
+        ptr_mut = nullptr;
+        node const* ptr = nullptr;
         std::uint64_t a = _tail.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
         std::uint64_t c = 0;
@@ -74,7 +72,7 @@ struct queue {
             if (_tail.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 // we take partial ownership of _tail and can dereference it
             alpha:
-                ptr = (node*) (b & LO);
+                ptr = (node const*) (b & LO);
                 c = 0;
                 do if (ptr->_next.compare_exchange_weak(c, z, std::memory_order_release, std::memory_order_acquire)) {
                     // we installed a new node
@@ -112,14 +110,10 @@ struct queue {
         }
     }
     
-    
-    
-    
-    
-    bool try_pop(T& x) {
+    bool try_pop(T& x) const {
         std::uint64_t a = _head.load(std::memory_order_relaxed);
         std::uint64_t b = 0;
-        node* ptr = nullptr;
+        node const* ptr = nullptr;
         std::uint64_t c = 0;
         for (;;) {
             // _head always points to the sentinel before the (potentially empty) queue
@@ -131,12 +125,12 @@ struct queue {
                 ptr = (node*) (b & LO);
                 c = ptr->_next.load(std::memory_order_acquire);
                 if (c & LO) {
-
                     do if (_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
                         // we installed _head and have one unit of ownership of the new head node
                         _release(ptr, (b >> 48) + 2); // release old head node
                         ptr = (node*) (c & LO);
-                        x = std::move(*ptr->_payload);
+                        // we have established unique access to the payload
+                        x = std::move(const_cast<T&>(*(ptr->_payload)));
                         ptr->_payload.erase();
                         _release(ptr, 1); // release new head node
                         return true;

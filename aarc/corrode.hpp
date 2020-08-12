@@ -86,16 +86,60 @@ struct async_read {
     }
 
     bool await_ready() {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(_fd, &readfds);
+        return false;
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(_fd, &fds);
         timeval t{0, 0};
-        return ((select(_fd + 1, &readfds, nullptr, nullptr, &t) == 1)
+        return ((select(_fd + 1, &fds, nullptr, nullptr, &t) == 1)
                 && ((void) _execute(), true));
     }
     
     void await_suspend(std::experimental::coroutine_handle<> handle) {
         reactor::get().when_readable(_fd, [=]() mutable {
+            _execute();
+            handle();
+        });
+    }
+    
+    ssize_t await_resume() {
+        return _return_value;
+    }
+    
+};
+
+
+
+struct async_write {
+    
+    int _fd;
+    void const* _buf;
+    size_t _count;
+    ssize_t _return_value;
+    
+    async_write(int fd, void const* buf, size_t count)
+    : _fd(fd)
+    , _buf(buf)
+    , _count(count) {
+    }
+
+    void _execute() {
+        _return_value = write(_fd, _buf, _count);
+        assert(_return_value > 0);
+    }
+
+    bool await_ready() {
+        return false;
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(_fd, &fds);
+        timeval t{0, 0};
+        return ((select(_fd + 1, nullptr, &fds, nullptr, &t) == 1)
+                && ((void) _execute(), true));
+    }
+    
+    void await_suspend(std::experimental::coroutine_handle<> handle) {
+        reactor::get().when_writeable(_fd, [=]() mutable {
             _execute();
             handle();
         });

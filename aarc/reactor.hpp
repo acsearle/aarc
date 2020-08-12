@@ -61,7 +61,7 @@ struct reactor {
     }
     
     void _notify() const {
-        printf("reactor::_notify()\n");
+        //printf("reactor::_notify()\n");
         unsigned char c{0};
         if (write(_pipe[1], &c, 1) != 1)
             (void) perror(strerror(errno)), abort();
@@ -160,14 +160,14 @@ struct reactor {
                 // we risk clearing notifications before we have observed their
                 // effects, so only read as many notifications (bytes) as we
                 // know have been sent
-                assert(outstanding > 0); // <-- else why is pipe readable?
+                // assert(outstanding > 0); // <-- else why is pipe readable?
                 buf.reserve(std::max<std::size_t>(outstanding, buf.capacity())); // <-- undefined behavior?
                 ssize_t r = read(_pipe[0], buf.data(), outstanding);
-                if (r <= 0)
+                if (r < 0)
                     (void) perror(strerror(errno)), abort();
                 assert(r <= outstanding);
                 outstanding -= r;
-                printf("outstanding notifications %llu\n", outstanding);
+                //printf("outstanding notifications %llu\n", outstanding);
                 --count;
             } else {
                 FD_SET(_pipe[0], &readset);
@@ -216,9 +216,9 @@ struct reactor {
             if (!pending.empty())
                 pool::submit_many(std::move(pending));
 
-            printf("sleeping\n");
+            //printf("sleeping\n");
             count = select(maxfd + 1, &readset, pwriteset, pexceptset, ptimeout);
-            printf("woke (%d fds)\n", count);
+            //printf("woke (%d fds)\n", count);
 
             if (count == -1)
                 (void) perror(strerror(errno)), abort();

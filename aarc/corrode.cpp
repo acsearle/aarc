@@ -36,10 +36,11 @@ TEST_CASE("await-forever", "[await]") {
 TEST_CASE("await-transfer", "[transfer]") {
 
     std::promise<std::thread::id> p;
-    [&]() -> void {
+    auto f = [&]() -> void {
         co_await transfer; // continue on pool thread
         p.set_value(std::this_thread::get_id());
-    }();
+    };
+    f();
     REQUIRE(p.get_future().get() != std::this_thread::get_id());
 }
 
@@ -51,12 +52,13 @@ TEST_CASE("await-read", "[await]") {
     
     std::promise<char> c;
     
-    [&]() -> void {
+    auto f = [&]() -> void {
         char b;
         ssize_t r = co_await async_read(p[0], &b, 1);
         assert(r == 1);
         c.set_value(b);
-    }();
+    };
+    f();
     
     std::this_thread::sleep_for(std::chrono::seconds{1});
 
@@ -88,6 +90,37 @@ TEST_CASE("await-future", "[await]") {
     printf("f\n");
 }
 
+void reader(int fd, int n, std::promise<void>& p) {
+    co_await transfer;
+    char c;
+    while (n) {
+        n -= co_await async_read(fd, &c, 1);
+    }
+    p.set_value();
+}
+
+void writer(int fd, int n) {
+    co_await transfer;
+    char c;
+    while (n) {
+        n -= co_await async_write(fd, &c, 1);
+    }
+}
+
+TEST_CASE("stress", "[await]") {
+    
+    std::promise<void> f;
+    
+    int p[2];
+    pipe(p);
+    int n = 5000'000;
+    reader(p[0], n, f);
+    writer(p[1], n);
+    
+    f.get_future().get();
+    
+    
+}
 
 
 void foo() {
@@ -152,62 +185,6 @@ struct await_time_point {
     }
     void await_resume() {}
 };
-
-struct await_read {
-    int _fd;
-    void* _buf;
-    size_t _count;
-    ssize_t ret;
-    await_read(int fd, void* buf, size_t count)
-    : _fd(fd), _buf(buf), _count(count) {
-    }
-    bool await_ready() { return false; }
-    template<typename T>
-    void await_suspend(std::experimental::coroutine_handle<T> h) {
-        std::thread([h, this] () mutable {
-            ret = read(_fd, _buf, _count);
-            h.resume();
-        }).detach();
-    }
-    ssize_t await_resume() {
-        return ret;
-    }
-};
-
-await_read async_read(int fd, void* buf, size_t count) {
-    return await_read(fd, buf, count);
-}
-
-void bar(int fd) {
-    char c = '-';
-    auto r = co_await async_read(fd, &c, 1);
-    printf("%c (read %td)\n", c, r);
-}
-
-
-template<typename Rep, typename Period>
-struct transfer {
-    bool await_ready() { return false; }
-    template<typename T>
-    void await_suspend(std::experimental::coroutine_handle<T> h) {
-        std::thread([h] () mutable {
-            h.resume();
-        }).detach();
-    }
-    void await_resume() {}
-};
-
-TEST_CASE("corrode") {
-    boo();
-    printf("relax...\n");
-    
-    int pipefd[2];
-    pipe(pipefd);
-    bar(pipefd[0]);
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    write(pipefd[1], "x", 1);
-
-}
 
 template<typename T>
 struct await_value {
