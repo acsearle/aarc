@@ -57,3 +57,28 @@ TEST_CASE("fn", "[fn]") {
 
     
 }
+
+TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
+
+    {
+        // mut
+        atomic<stack<fn<int>>> a;
+        a.push(fn<int>::from([] { return 1; }));
+        a.push(fn<int>::from([] { return 2; }));
+        REQUIRE(a.pop()() == 2);
+        REQUIRE(a.pop()() == 1);
+        REQUIRE_FALSE(a.pop());
+    }
+    
+    {
+        // const
+        atomic<stack<fn<int>>> z;
+        atomic<stack<fn<int>>> const& a = z;
+        a.push(fn<int>::from([] { return 1; }));
+        a.push(fn<int>::from([] { return 2; }));
+        auto b = a.take();
+        REQUIRE(b.pop()() == 2);
+        REQUIRE(b.pop()() == 1);
+        REQUIRE_FALSE(b.pop());
+    }
+}
