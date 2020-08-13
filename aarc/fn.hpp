@@ -95,7 +95,7 @@ struct alignas(16) node : successible {
 }; // node
 
 template<typename R, typename T>
-struct wrapper : node<R> {
+struct wrapper final : node<R> {
     
     static_assert(sizeof(node<R>) == 32);
     
@@ -115,7 +115,7 @@ struct wrapper : node<R> {
         _payload.erase();
     }
     
-    virtual R mut_call_and_erase() override final {
+    virtual R mut_call_and_erase() override final try {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
             erase(); // <-- nonvirtual because final
@@ -124,6 +124,9 @@ struct wrapper : node<R> {
             erase();
             return r; // <-- "this" is now invalid but r is a stack variable
         }
+    } catch(...) {
+        erase();
+        throw;
     }
     
     virtual void erase_and_delete() const noexcept override final {
@@ -136,7 +139,7 @@ struct wrapper : node<R> {
         this->release(n); // <-- encourage inlined destructor as part of same call
     };
 
-    virtual R mut_call_and_erase_and_delete() override final {
+    virtual R mut_call_and_erase_and_delete() override final try {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
             erase_and_delete(); // <-- nonvirtual because final
@@ -146,9 +149,12 @@ struct wrapper : node<R> {
             erase_and_delete();
             return r; // <-- "this" is now invalid but r is a stack variable
         }
+    } catch(...) {
+        erase_and_delete();
+        throw;
     }
 
-    virtual R mut_call_and_erase_and_release(u64 n) override final {
+    virtual R mut_call_and_erase_and_release(u64 n) override final try {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
             erase_and_release(n); // <-- nonvirtual because final
@@ -158,6 +164,9 @@ struct wrapper : node<R> {
             erase_and_release(n);
             return r; // <-- "this" is now invalid but r is a stack variable
         }
+    } catch(...) {
+        erase_and_release(n);
+        throw;
     }
 
     virtual u64 try_clone() const override final {

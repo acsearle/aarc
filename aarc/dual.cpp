@@ -6,6 +6,7 @@
 //  Copyright © 2020 Antony Searle. All rights reserved.
 //
 
+#include <thread>
 #include "atomic.hpp"
 #include "dual.hpp"
 #include "fn.hpp"
@@ -137,7 +138,7 @@ struct dual {
         assert(z & CNT);
         assert(z & PTR);
         assert(z & TAG);
-        assert(ptr(z)->_count.load(std::memory_order_relaxed) == ((z >> 48) + 1));
+        assert(ptr(z)->_count.load(std::memory_order_relaxed) >= ((z >> 48) + 1));
         
         u64  a; // <-- old value of _head
         u64  b; // <-- new value of _head
@@ -184,7 +185,7 @@ struct dual {
     }
     
     
-    void push(u64 x) const {
+    void push(fn<void> x) const {
 
         // over the lifetime of the queue node,
         //     weight 0xFFFF is placed in _tail
@@ -192,40 +193,69 @@ struct dual {
         //     weight 0xFFFF is placed in _head
         //     weight 0x0001 is awarded to the placer
         
+        assert(!(x._value & ~PTR));
+        x._value &= PTR;
+        assert(x);
+        x._value |= 0xFFFE'0000'0000'0000;
+        x->_next = 0;
+        x->_count = 0x0000'0000'0002'0000;
+        x->_promise = 0;
+        u64 c = _push(x._value);
+        if (c) {
+            // send the task to the thread we found waiting
+            assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
+            ptr(c)->_promise.store(x._value, std::memory_order_release);
+            ptr(c)->_promise.notify_one();
+            ptr(c)->release(cnt(c));
+        }
+        x._value = 0;
+    }
+    
+    void pop() const {
         auto a = new detail::node<void>;
         a->_next = 0;
-        a->_count = 0x0000'0000'0002'0000;
-        a->_promise = x;
-        u64 b = 0xFFFE'0000'0000'0000 | reinterpret_cast<u64>(a);
-        u64 c = _push(b);
+        a->_count = 0x0000'0000'0001'0001;
+        a->_promise = 0;
+        u64 b = reinterpret_cast<u64>(a);
+        b |= 0xFFFF'0000'0000'0001;
+        u64 c = _pop(b);
         if (c) {
-            // we popped a stack node instead
             delete ptr(b);
-            ptr(c)->release(cnt(c));
+            mptr(c)->mut_call_and_erase_and_release(cnt(c));
         } else {
-            // we pushed the queue node
+            ptr(b)->_promise.wait(0, std::memory_order_relaxed);
+            c = ptr(b)->_promise.load(std::memory_order_acquire);
+            ptr(b)->release(1);
+            mptr(c)->mut_call_and_erase_and_delete();
         }
     }
     
-    u64 pop() const {
-        auto a = new detail::node<void>;
+    [[noreturn]] void pop_forever() const {
+        detail::node<void>* a; // <-- the node containing our promise
+        u64 b;                 // <-- the counted ptr to same
+        u64 c;                 // <-- the counted ptr to a task we popped
+        
+    _construct_promise:
+        a = new detail::node<void>;
         a->_next = 0;
-        a->_count = 0x0000'0000'0001'0000;
-        a->_promise = -1;
-        //                          v : tag bit
-        u64 b = 0xFFFF'0000'0000'0001 | reinterpret_cast<u64>(a);
-        //                          ^
-        u64 c = _pop(b);
-        if (c) {
-            assert(cnt(c) == 1); // <-- the node is still the sentinel, we share it
-            delete ptr(b);
-            u64 z = ptr(c)->_promise.load(std::memory_order_acquire);
-            ptr(c)->release(cnt(c));
-            return z;
-        } else {
-            // <-- we pushed the stack node
-            return -2;
-        }
+        a->_count = 0x0000'0000'0001'0001;
+        a->_promise = 0;
+        b = reinterpret_cast<u64>(a);
+        b |= 0xFFFF'0000'0000'0001;
+    _submit_promise:
+        c = _pop(b);
+        if (!c)
+            goto _wait_on_promise;
+        mptr(c)->mut_call_and_erase_and_release(cnt(c));
+        goto _submit_promise;
+        
+    _wait_on_promise:
+        ptr(b)->_promise.wait(0, std::memory_order_relaxed);
+        c = ptr(b)->_promise.load(std::memory_order_acquire);
+        assert(c);
+        ptr(b)->release(1);
+        mptr(c)->mut_call_and_erase_and_delete();
+        goto _construct_promise;
     }
     
 };
@@ -233,8 +263,23 @@ struct dual {
 
 TEST_CASE("dual", "[dual]") {
     
+    int z = 0;
+    
     dual a;
-    a.push( 7);
+    std::thread b;
+    a.push([&] { z = 1; });
+    REQUIRE(z == 0);
+    a.pop();
+    REQUIRE(z == 1);
+    b = std::thread([&] { a.pop(); });
+    a.push([&] { z = 2; });
+    a.push([&] { z = 3; });
+    b.join();
+    REQUIRE(z == 2);
+    a.pop();
+    REQUIRE(z == 3);
+    
+    /*
     REQUIRE(a.pop() ==  7);
     REQUIRE(a.pop() == -2); // <-- will consume 8
     a.push( 8);             // <-- matched with unfulfilled pop
@@ -251,5 +296,6 @@ TEST_CASE("dual", "[dual]") {
     REQUIRE(a.pop() == 13);
     REQUIRE(a.pop() == 14);
     REQUIRE(a.pop() == -2); // <-- unfulfilled
+     */
     
 }

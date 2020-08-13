@@ -21,7 +21,7 @@ struct maybe {
         new ((void*) _value) T(std::forward<Args>(args)...);
     }
     
-    void erase() const {
+    void erase() const noexcept {
         (*this)->~T();
     }
     
