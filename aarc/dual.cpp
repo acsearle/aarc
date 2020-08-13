@@ -8,6 +8,7 @@
 
 #include "atomic.hpp"
 #include "dual.hpp"
+#include "fn.hpp"
 
 #include "catch.hpp"
 
@@ -20,40 +21,26 @@
 
 struct dual {
     
-    using u64 = std::uint64_t;
+    static constexpr u64 CNT = detail::CNT;
+    static constexpr u64 PTR = detail::PTR;
+    static constexpr u64 TAG = detail::TAG;
+    static constexpr u64 INC = detail::INC;
     
-    static constexpr u64 CNT = 0xFFFF'0000'0000'0000;
-    static constexpr u64 PTR = 0x0000'FFFF'FFFF'FFF0;
-    static constexpr u64 TAG = 0x0000'0000'0000'000F;
-    static constexpr u64 INC = 0x0001'0000'0000'0000;
-
     alignas(64) atomic<u64> _head;
     alignas(64) atomic<u64> _tail;
-    
-    struct node {
         
-        atomic<u64> _next;
-        atomic<u64> _count;
-        int _payload;
-        
-        void release(u64 n) const {
-            auto m = _count.fetch_sub(n, std::memory_order_release);
-            assert(m >= n);
-            if (m == n) {
-                m = _count.load(std::memory_order_acquire);
-                assert(m == 0);
-                delete this;
-            }
-        }
-        
-    };
-    
-    static node const* ptr(u64 x) { assert(x & PTR); return reinterpret_cast<node const*>(x & PTR); }
-    static node* mptr(u64 x) { assert(x & PTR); return reinterpret_cast<node*>(x & PTR); }
+    static detail::node<void> const* ptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void> const*>(x & PTR); }
+    static detail::node<void>* mptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void>*>(x & PTR); }
     static u64 cnt(u64 x) { return (x >> 48) + 1; }
     
-    dual() : dual(CNT | reinterpret_cast<u64>(new node{0, 0x0000'0000'00002'0000})) {}
-    explicit dual(u64 x) : _head(x), _tail(x) {}
+    dual() {
+        auto p = new detail::node<void>;
+        p->_next = 0;
+        p->_count = 0x0000'0000'00002'0000;
+        auto v = CNT | reinterpret_cast<u64>(p);
+        _head = v;
+        _tail = v;
+    }
     
     u64 _push(u64 z) const {
         
@@ -197,7 +184,7 @@ struct dual {
     }
     
     
-    void push(int x) const {
+    void push(u64 x) const {
 
         // over the lifetime of the queue node,
         //     weight 0xFFFF is placed in _tail
@@ -205,8 +192,11 @@ struct dual {
         //     weight 0xFFFF is placed in _head
         //     weight 0x0001 is awarded to the placer
         
-        auto a = new node{0, 0x0000'0000'0002'0000, x};
-        u64 b = 0xFFFE'0000'0000'0000 | (u64) a;
+        auto a = new detail::node<void>;
+        a->_next = 0;
+        a->_count = 0x0000'0000'0002'0000;
+        a->_promise = x;
+        u64 b = 0xFFFE'0000'0000'0000 | reinterpret_cast<u64>(a);
         u64 c = _push(b);
         if (c) {
             // we popped a stack node instead
@@ -217,15 +207,19 @@ struct dual {
         }
     }
     
-    int pop() const {
-        
-        node* a = new node{0, 0x0000'0000'0001'0000, -1};
-        u64 b = 0xFFFF'0000'0000'0001 | (u64) a;
+    u64 pop() const {
+        auto a = new detail::node<void>;
+        a->_next = 0;
+        a->_count = 0x0000'0000'0001'0000;
+        a->_promise = -1;
+        //                          v : tag bit
+        u64 b = 0xFFFF'0000'0000'0001 | reinterpret_cast<u64>(a);
+        //                          ^
         u64 c = _pop(b);
         if (c) {
             assert(cnt(c) == 1); // <-- the node is still the sentinel, we share it
             delete ptr(b);
-            int z = ptr(c)->_payload;
+            u64 z = ptr(c)->_promise.load(std::memory_order_acquire);
             ptr(c)->release(cnt(c));
             return z;
         } else {
