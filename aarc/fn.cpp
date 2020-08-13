@@ -18,7 +18,7 @@ TEST_CASE("fn", "[fn]") {
     }
     {
         bool b = false;
-        auto a = fn<bool>::from([&] {
+        auto a = fn<bool>([&] {
             return b = true;
         });
         REQUIRE(((bool) a));
@@ -31,7 +31,7 @@ TEST_CASE("fn", "[fn]") {
     {
         int i = 0;
         int j = 1;
-        auto a = fn<void>::from([&i, j]() mutable {
+        auto a = fn<void>([&i, j]() mutable {
             j = (i += j);
         });
         fn<void> b;

@@ -16,12 +16,24 @@ struct stack;
 
 template<typename R>
 struct atomic<stack<fn<R>>> : detail::successible {
-        
+    
+    static constexpr auto PTR = detail::PTR;
+    
+    static detail::node<R> const* cptr(u64 v) {
+        return reinterpret_cast<detail::node<R> const*>(v & PTR);
+    }
+
+    static detail::node<R>* mptr(u64 v) {
+        return reinterpret_cast<detail::node<R>*>(v & PTR);
+    }
+
     atomic()
     : detail::successible{0} {
     }
     
-    explicit atomic(std::uint64_t v) : detail::successible{v} {}
+    explicit atomic(std::uint64_t v)
+    : detail::successible{v} {
+    }
     
     atomic(atomic const&) = delete;
     atomic(atomic&& other)
@@ -53,9 +65,9 @@ struct atomic<stack<fn<R>>> : detail::successible {
     }
     
     void splice(atomic x) {
-        auto p = detail::ptr<detail::node<R>>(x._next);
+        auto p = mptr(x._next);
         if (p) {
-            while (auto q = detail::ptr<detail::node<R>>(p->_next))
+            while (auto q = mptr(p->_next))
                 p = q;
             p->_next = _next;
             _next = x._next;
@@ -106,27 +118,27 @@ struct atomic<stack<fn<R>>> : detail::successible {
         
     bool push(fn<R> x) const {
         if (x) {
-            std::uint64_t old = _next.load(std::memory_order_relaxed);
+            u64 old = _next.load(std::memory_order_relaxed);
             x->_next = old;
             while (!_next.compare_exchange_weak(x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
                 old = x->_next;
             x._value = 0;
-            return !(old & detail::PTR); // <-- did we transition from empty to nonempty?
+            return !cptr(old); // <-- did we transition from empty to nonempty?
         }
         return false;
     }
     
     bool splice(atomic x) const {
-        auto p = detail::ptr<detail::node<R>>(x._next);
+        auto p = mptr(x._next);
         if (p) {
-            while (auto q = detail::ptr<detail::node<R>>(p->_next))
+            while (auto q = mptr(p->_next))
                 p = q;
-            std::uint64_t old = _next.load(std::memory_order_relaxed);
+            u64 old = _next.load(std::memory_order_relaxed);
             p->_next = old;
             while (!_next.compare_exchange_weak(p->_next, x._next, std::memory_order_release, std::memory_order_relaxed))
                 old = p->_next;
             x._next = 0;
-            return !(old & detail::PTR); // <-- did we transition from empty to nonempty?
+            return !cptr(old); // <-- did we transition from empty to nonempty?
         }
         return false;
     }
@@ -166,27 +178,27 @@ struct atomic<stack<fn<R>>> : detail::successible {
         
         iterator& operator++() {
             assert(_ptr);
-            _ptr = detail::ptr<detail::node<R>>(_ptr->_next);
+            _ptr = mptr(_ptr->_next);
             return *this;
         }
         
         iterator operator++(int) {
             assert(_ptr);
             iterator tmp{_ptr};
-            _ptr = detail::ptr<detail::node<R>>(_ptr->_next);
+            _ptr = mptr(_ptr->_next);
             return tmp;
         }
         
         detail::node<R>& operator*() {
-            return *detail::ptr<detail::node<R>>(_ptr->_next);
+            return *mptr(_ptr->_next);
         }
         
         detail::node<R>* operator->() {
-            return detail::ptr<detail::node<R>>(_ptr->_next);
+            return mptr(_ptr->_next);
         }
                 
         bool operator!=(iterator b) {
-            return (_ptr->_next ^ b._ptr->_next) & detail::PTR;
+            return (_ptr->_next ^ b._ptr->_next) & PTR;
         }
         
         bool operator==(iterator b) {
@@ -194,7 +206,7 @@ struct atomic<stack<fn<R>>> : detail::successible {
         }
         
         bool operator!=(sentinel) {
-            return _ptr->_next & detail::PTR;
+            return _ptr->_next & PTR;
         }
         
         bool operator==(sentinel) {
@@ -209,11 +221,8 @@ struct atomic<stack<fn<R>>> : detail::successible {
     // erases element pointed to by iterator
     // after erasure, same iterator points at element after erased element
     fn<R> erase(iterator it) {
-        fn<R> f{it._ptr->_next};
-        auto p = detail::ptr<detail::node<R>>(it._ptr->_next);
-        assert(p);
-        it._ptr->_next = p->_next;
-        return f;
+        return fn<R>{std::exchange(it._ptr->_next,
+                                   mptr(it._ptr->_next)->_next)};
     }
     
     // inserts before element pointed to by iterator

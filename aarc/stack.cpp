@@ -18,8 +18,8 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
     {
         // mut
         atomic<stack<fn<int>>> a;
-        a.push(fn<int>::from([] { return 1; }));
-        a.push(fn<int>::from([] { return 2; }));
+        a.push(fn<int>([] { return 1; }));
+        a.push(fn<int>([] { return 2; }));
         REQUIRE(a.pop()() == 2);
         REQUIRE(a.pop()() == 1);
         REQUIRE_FALSE(a.pop());
@@ -29,8 +29,8 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
         // const
         atomic<stack<fn<int>>> z;
         atomic<stack<fn<int>>> const& a = z;
-        a.push(fn<int>::from([] { return 1; }));
-        a.push(fn<int>::from([] { return 2; }));
+        a.push(fn<int>([] { return 1; }));
+        a.push(fn<int>([] { return 2; }));
         auto b = a.take();
         REQUIRE(b.pop()() == 2);
         REQUIRE(b.pop()() == 1);
@@ -39,7 +39,7 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
     {
         atomic<stack<fn<int>>> a;
         for (int i = 0; i != 10; ++i) {
-            a.push(fn<int>::from([i] { return i; }));
+            a.push(fn<int>([i] { return i; }));
         }
         int j = 9;
         for (auto& b : a) {
@@ -65,7 +65,7 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
             REQUIRE(fn<int>(i->try_clone())() == 3);
             ++i;
             REQUIRE(fn<int>(i->try_clone())() == 4);
-            a.insert(i, fn<int>::from([]{ return 1000; }));
+            a.insert(i, fn<int>([]{ return 1000; }));
             REQUIRE(fn<int>(i->try_clone())() == 1000);
             REQUIRE(a.pop()() == 3);
             REQUIRE(a.pop()() == 1000);

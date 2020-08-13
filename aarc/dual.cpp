@@ -22,10 +22,10 @@ struct dual {
     
     using u64 = std::uint64_t;
     
-    static constexpr std::uint64_t CNT = 0xFFFF'0000'0000'0000;
-    static constexpr std::uint64_t PTR = 0x0000'FFFF'FFFF'FFF0;
-    static constexpr std::uint64_t TAG = 0x0000'0000'0000'000F;
-    static constexpr std::uint64_t INC = 0x0001'0000'0000'0000;
+    static constexpr u64 CNT = 0xFFFF'0000'0000'0000;
+    static constexpr u64 PTR = 0x0000'FFFF'FFFF'FFF0;
+    static constexpr u64 TAG = 0x0000'0000'0000'000F;
+    static constexpr u64 INC = 0x0001'0000'0000'0000;
 
     alignas(64) atomic<u64> _head;
     alignas(64) atomic<u64> _tail;

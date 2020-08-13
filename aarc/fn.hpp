@@ -19,52 +19,27 @@
 //
 // move-only (explicit maybe-clone)
 
+using u64 = std::uint64_t;
+
 namespace detail {
 
 // packed_ptr layout:
 
-static constexpr std::uint64_t CNT = 0xFFFF'0000'0000'0000;
-static constexpr std::uint64_t PTR = 0x0000'FFFF'FFFF'FFF0;
-static constexpr std::uint64_t TAG = 0x0000'0000'0000'000F;
-static constexpr std::uint64_t LOW = 0x0000'0000'0000'FFFF;
+static constexpr u64 CNT = 0xFFFF'0000'0000'0000;
+static constexpr u64 PTR = 0x0000'FFFF'FFFF'FFF0;
+static constexpr u64 TAG = 0x0000'0000'0000'000F;
+static constexpr u64 INC = 0x0001'0000'0000'0000;
 
-template<typename T>
-inline T* ptr(std::uint64_t v) {
-    return reinterpret_cast<T*>(v & PTR);
-}
-
-inline std::uint64_t cnt(std::uint64_t v) {
+inline u64 cnt(u64 v) {
     return (v >> 48) + 1;
 }
 
-inline std::uint64_t tag(std::uint64_t v) {
-    return v & TAG;
-}
-
-inline std::uint64_t val(void* p) {
-    auto n = reinterpret_cast<std::uint64_t>(p);
-    assert(!(n & ~PTR));
-    return n;
-}
-
-inline std::uint64_t val(std::uint64_t n, void* p) {
-    n = (n - 1);
-    assert(!(n & ~LOW));
-    return (n << 48) | val(p);
-}
-
-inline std::uint64_t val(std::uint64_t n, void* p, std::uint64_t t) {
-    assert(!(t & ~TAG));
-    return val(n, p) | t;
-}
-
 struct successible {
-    atomic<std::uint64_t> _next = 0;
+    atomic<u64> _next;
 };
 
 template<typename R>
-struct alignas(16) node
-: successible {
+struct alignas(16) node : successible {
     
     //
     // layout:
@@ -72,9 +47,9 @@ struct alignas(16) node
     //  0: __vtbl
     //  8: _raw_next + _atomic_next
     // 16: _count
-    // 24: { _fd, _flags } + _t
+    // 24: { _fd, _flags } + _t + _promise
         
-    atomic<std::uint64_t> _count;
+    atomic<u64> _count;
         
     union {
         struct {
@@ -82,13 +57,16 @@ struct alignas(16) node
             int _flags;
         };
         std::chrono::time_point<std::chrono::steady_clock> _t;
+        atomic<u64> _promise;
     };
     
     node()
-    : _count{0x0000'0000'0001'0000} {
+    : successible{0}
+    , _count{0}
+    , _promise{0} {
     }
-    
-    void release(std::uint64_t n) const {
+        
+    void release(u64 n) const {
         auto m = _count.fetch_sub(n, std::memory_order_release);
         assert(m >= n);
         if (m == n) {
@@ -100,13 +78,19 @@ struct alignas(16) node
 
     virtual ~node() noexcept = default;
     
-    virtual R call() { abort(); }
+    virtual R mut_call() { abort(); }
     virtual void erase() const noexcept {}
-    virtual R call_and_erase() { abort(); }
+    virtual R mut_call_and_erase() { abort(); }
     virtual void erase_and_delete() const noexcept { delete this; }
-    virtual R call_and_erase_and_delete() { abort(); }
-    
-    virtual std::uint64_t try_clone() const { return CNT | val(new node); }
+    virtual void erase_and_release(u64 n) const noexcept { release(n); }
+    virtual R mut_call_and_erase_and_delete() { abort(); }
+    virtual R mut_call_and_erase_and_release(u64 n) { abort(); }
+
+    virtual u64 try_clone() const {
+        auto v = reinterpret_cast<u64>(new node);
+        assert(!(v & ~PTR));
+        return v;
+    }
 
 }; // node
 
@@ -119,7 +103,7 @@ struct wrapper : node<R> {
                 
     virtual ~wrapper() noexcept override final = default;
     
-    virtual R call() override final {
+    virtual R mut_call() override final {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
         } else {
@@ -131,7 +115,7 @@ struct wrapper : node<R> {
         _payload.erase();
     }
     
-    virtual R call_and_erase() override final {
+    virtual R mut_call_and_erase() override final {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
             erase(); // <-- nonvirtual because final
@@ -147,7 +131,12 @@ struct wrapper : node<R> {
         delete this;
     };
 
-    virtual R call_and_erase_and_delete() override final {
+    virtual void erase_and_release(u64 n) const noexcept override final {
+        _payload.erase();
+        this->release(n); // <-- encourage inlined destructor as part of same call
+    };
+
+    virtual R mut_call_and_erase_and_delete() override final {
         if constexpr (std::is_same_v<R, void>) {
             _payload.get()();
             erase_and_delete(); // <-- nonvirtual because final
@@ -158,12 +147,26 @@ struct wrapper : node<R> {
             return r; // <-- "this" is now invalid but r is a stack variable
         }
     }
-    
-    virtual std::uint64_t try_clone() const override final {
+
+    virtual R mut_call_and_erase_and_release(u64 n) override final {
+        if constexpr (std::is_same_v<R, void>) {
+            _payload.get()();
+            erase_and_release(n); // <-- nonvirtual because final
+            return;
+        } else {
+            R r{_payload.get()()};
+            erase_and_release(n);
+            return r; // <-- "this" is now invalid but r is a stack variable
+        }
+    }
+
+    virtual u64 try_clone() const override final {
         if constexpr (std::is_copy_constructible_v<T>) {
             auto p = new wrapper;
             p->_payload.emplace(_payload.get());
-            return CNT | val(p);
+            auto v = reinterpret_cast<u64>(p);
+            assert(!(v & ~PTR));
+            return (u64) p;
         } else {
             return 0;
         }
@@ -176,10 +179,15 @@ struct wrapper : node<R> {
 
 template<typename R>
 struct fn {
-    
-    using N = detail::node<R>;
-                
-    std::uint64_t _value;
+
+    static constexpr auto PTR = detail::PTR;
+    static constexpr auto TAG = detail::TAG;
+
+    u64 _value;
+
+    static detail::node<R>* ptr(u64 v) {
+        return reinterpret_cast<detail::node<R>*>(v & PTR);
+    }
     
     fn()
     : _value{0} {
@@ -196,7 +204,8 @@ struct fn {
     fn(T f) {
         auto p = new detail::wrapper<R, T>;
         p->_payload.emplace(std::forward<T>(f));
-        _value = detail::CNT | val(p);
+        _value = reinterpret_cast<u64>(p);
+        assert(!(_value & ~PTR));
     }
     
     explicit fn(std::uint64_t value)
@@ -204,31 +213,24 @@ struct fn {
     }
     
     fn try_clone() const {
-        auto p = detail::ptr<detail::node<R>>(_value);
-        std::uint64_t v = 0;
-        if (p) {
+        auto p = ptr(_value);
+        u64 v = 0;
+        if (p)
             v = p->try_clone();
-            if (v) {
-                v |= (_value & detail::TAG);
-            }
-        }
         return fn(v);
     }
 
     detail::node<R>* get() {
-        return detail::ptr<detail::node<R>>(_value);
+        return ptr(_value);
     }
 
     detail::node<R> const* get() const {
-        return detail::ptr<const detail::node<R>>(_value);
+        return ptr(_value);
     }
 
     ~fn() {
-        auto p = get();
-        if (p) {
-            assert(detail::cnt(_value) == p->_count);
+        if (auto p = ptr(_value))
             p->erase_and_delete();
-        }
     }
     
     void swap(fn& other) {
@@ -242,52 +244,34 @@ struct fn {
         fn(std::move(other)).swap(*this);
         return *this;
     }
-
-    template<typename T>
-    static fn from(T&& x) {
-        auto p = new detail::wrapper<R, T>;
-        p->_payload.emplace(std::forward<T>(x));
-        return fn(detail::CNT | val(p));
-    }
-    
-    static fn sentinel() {
-        auto p = new detail::node<R>;
-        return fn(detail::CNT | val(p));
-    }
     
     R operator()() {
-        auto p = detail::ptr<detail::node<R>>(_value);
+        auto p = ptr(_value);
         assert(p);
-        assert(detail::cnt(_value) == p->_count);
         _value = 0;
         if constexpr (std::is_same_v<R, void>) {
-            p->call_and_erase_and_delete();
+            p->mut_call_and_erase_and_delete();
             return;
         } else {
-            R r(p->call_and_erase_and_delete());
+            R r(p->mut_call_and_erase_and_delete());
             return r;
         }
     }
     
     operator bool() const {
-        return _value & detail::PTR;
+        return ptr(_value);
     }
     
     std::uint64_t tag() const {
         return _value & detail::TAG;
     }
-    
-    void set_tag(std::uint64_t t) {
-        assert(!(t & ~detail::TAG));
-        _value = (_value & ~detail::TAG) | t;
-    }
-    
+        
     detail::node<R>* operator->() {
-        return get();
+        return ptr(_value);
     }
 
     detail::node<R> const* operator->() const {
-        return get();
+        return ptr(_value);
     }
 
 };
