@@ -21,8 +21,10 @@
 
 namespace detail {
 
-static constexpr std::uint64_t PTR = 0x0000'FFFF'FFFF'FFF0;
+// packed_ptr layout:
+
 static constexpr std::uint64_t CNT = 0xFFFF'0000'0000'0000;
+static constexpr std::uint64_t PTR = 0x0000'FFFF'FFFF'FFF0;
 static constexpr std::uint64_t TAG = 0x0000'0000'0000'000F;
 static constexpr std::uint64_t LOW = 0x0000'0000'0000'FFFF;
 
@@ -57,7 +59,7 @@ inline std::uint64_t val(std::uint64_t n, void* p, std::uint64_t t) {
 }
 
 struct successible {
-    atomic<std::uint64_t> _next;
+    atomic<std::uint64_t> _next = 0;
 };
 
 template<typename R>
@@ -188,7 +190,8 @@ struct fn {
     fn(fn&& other)
     : _value(std::exchange(other._value, 0)) {
     }
-    
+    fn(fn const&&) = delete;
+
     template<typename T, typename = std::void_t<decltype(std::declval<T>()())>>
     fn(T f) {
         auto p = new detail::wrapper<R, T>;

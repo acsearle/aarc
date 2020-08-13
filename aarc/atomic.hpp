@@ -60,7 +60,7 @@ public:
     
     T exchange(T, std::memory_order) = delete;
     T exchange(T x, std::memory_order order) const {
-        return _atomic.exchange(order);
+        return _atomic.exchange(x, order);
     }
     
     bool compare_exchange_weak(T&, T, std::memory_order, std::memory_order) = delete;
@@ -85,7 +85,7 @@ public:
     
     void notify_all() noexcept = delete;
     void notify_all() const noexcept {
-        std::atomic_notify_all(*_atomic);
+        std::atomic_notify_all(&_atomic);
     }
     
     T fetch_add(T, std::memory_order) = delete;

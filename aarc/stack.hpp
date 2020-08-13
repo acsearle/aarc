@@ -101,28 +101,34 @@ struct atomic<stack<fn<R>>> : detail::successible {
     
     atomic exchange(atomic x) = delete;
     atomic exchange(atomic x) const {
-        return atomic{_next.exchange(std::exchange(x._head._next, 0), std::memory_order_acq_rel)};
+        return atomic{_next.exchange(std::exchange(x._next, 0), std::memory_order_acq_rel)};
     }
         
-    void push(fn<R> x) const {
+    bool push(fn<R> x) const {
         if (x) {
-            x->_next = _next.load(std::memory_order_relaxed);
+            std::uint64_t old = _next.load(std::memory_order_relaxed);
+            x->_next = old;
             while (!_next.compare_exchange_weak(x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
-                ;
+                old = x->_next;
             x._value = 0;
+            return !(old & detail::PTR); // <-- did we transition from empty to nonempty?
         }
+        return false;
     }
     
-    void splice(atomic x) const {
+    bool splice(atomic x) const {
         auto p = detail::ptr<detail::node<R>>(x._next);
         if (p) {
             while (auto q = detail::ptr<detail::node<R>>(p->_next))
                 p = q;
-            p->_next = _next.load(std::memory_order_relaxed);
+            std::uint64_t old = _next.load(std::memory_order_relaxed);
+            p->_next = old;
             while (!_next.compare_exchange_weak(p->_next, x._next, std::memory_order_release, std::memory_order_relaxed))
-                ;
+                old = p->_next;
             x._next = 0;
+            return !(old & detail::PTR); // <-- did we transition from empty to nonempty?
         }
+        return false;
     }
     
     atomic take() = delete;

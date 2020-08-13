@@ -113,7 +113,7 @@ struct reactor {
         atomic<stack<fn<void>>> excepters;
         std::priority_queue<fn<void>, std::vector<fn<void>>, cmp_t> timers;
         
-        std::list<fn<void>> pending;
+        atomic<stack<fn<void>>> pending;
         std::vector<char> buf;
         
         int count = 0; // <-- the number of events observed by select
@@ -179,7 +179,7 @@ struct reactor {
                     int fd = i->_fd;
                     if (count && FD_ISSET(fd, set)) {
                         FD_CLR(fd, set);
-                        pending.push_back(list.erase(i));
+                        pending.push(list.erase(i));
                         --count;
                     } else {
                         assert(!FD_ISSET(fd, set)); // <-- detects undercount
@@ -200,7 +200,7 @@ struct reactor {
             auto now = std::chrono::steady_clock::now();
             
             while ((!timers.empty()) && (timers.top()->_t <= now)) {
-                pending.emplace_back(std::move(const_cast<fn<void>&>(timers.top())));
+                pending.push(std::move(const_cast<fn<void>&>(timers.top())));
                 timers.pop();
             }
             if (!timers.empty()) {

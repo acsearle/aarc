@@ -17,8 +17,80 @@
 #include <vector>
 
 #include "fn.hpp"
+#include "stack.hpp"
+
+
 
 struct pool {
+    
+    alignas(64) atomic<stack<fn<void>>> _stack;
+    alignas(64) atomic<bool> _cancelled;
+    std::vector<std::thread> _threads;
+
+    pool() {
+        auto n = std::thread::hardware_concurrency();
+        _threads.reserve(n);
+        while (_threads.size() != n)
+            _threads.emplace_back(&pool::_run, this);
+    }
+    
+    void _run() const {
+        while (!_cancelled.load(std::memory_order_acquire)) {
+            auto s = _stack.take();
+            if (s.empty()) {
+                _stack.wait();
+            } else {
+                s.reverse();
+                while (!s.empty())
+                    s.pop()();
+            }
+        }
+    }
+    
+    void _cancel() const {
+        _cancelled.store(true, std::memory_order_release);
+        _stack.notify_all();
+    }
+    
+    ~pool() {
+        _cancel();
+        while (!_threads.empty()) {
+            _threads.back().join();
+            _threads.pop_back();
+        }
+    }
+    
+    static pool const& _get() {
+        static pool p;
+        return p;
+    }
+    
+    void _submit_one(fn<void> f) const {
+        if (_stack.push(std::move(f)))
+            _stack.notify_one();
+    }
+    
+    void _submit_many(atomic<stack<fn<void>>> s) const {
+        if (_stack.splice(std::move(s)))
+            _stack.notify_one();
+    }
+
+    static void submit_one(fn<void> f) {
+        _get()._submit_one(std::move(f));
+    }
+    
+    static void submit_many(atomic<stack<fn<void>>> s) {
+        _get()._submit_many(std::move(s));
+    }
+        
+}; // struct pool
+
+
+
+
+
+#if 0
+struct pool_monitor {
     
     std::mutex _mutex;
     std::condition_variable _ready;
@@ -27,11 +99,11 @@ struct pool {
     bool _cancelled;
     std::size_t _waiters;
     
-    pool() {
+    pool_monitor() {
         auto n = std::thread::hardware_concurrency();
         _threads.reserve(n);
         while (_threads.size() != n)
-            _threads.emplace_back(&pool::run, this);
+            _threads.emplace_back(&pool_monitor::run, this);
     }
     
     void run() {
@@ -64,7 +136,7 @@ struct pool {
         }   // <-- tmp destroys all pending jobs
     }
     
-    ~pool() {
+    ~pool_monitor() {
         _cancel();
         while (!_threads.empty()) {
             _threads.back().join();
@@ -120,5 +192,6 @@ struct pool {
     }
         
 }; // struct pool
+#endif
 
 #endif /* pool_hpp */

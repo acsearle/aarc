@@ -113,7 +113,7 @@ TEST_CASE("stress", "[await]") {
     
     int p[2];
     pipe(p);
-    int n = 5000'000;
+    int n = 500'000;
     reader(p[0], n, f);
     writer(p[1], n);
     

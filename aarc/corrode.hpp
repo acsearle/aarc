@@ -77,7 +77,8 @@ struct async_read {
     async_read(int fd, void* buf, size_t count)
     : _fd(fd)
     , _buf(buf)
-    , _count(count) {
+    , _count(count)
+    , _return_value(-1) {
     }
 
     void _execute() {
@@ -86,7 +87,7 @@ struct async_read {
     }
 
     bool await_ready() {
-        return false;
+        //return false;
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(_fd, &fds);
@@ -129,7 +130,7 @@ struct async_write {
     }
 
     bool await_ready() {
-        return false;
+        //return false;
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(_fd, &fds);
