@@ -36,10 +36,10 @@ struct reactor {
     // before the second task sees it)
             
     // buffers for recently-added waiters and timers
-    alignas(64) atomic<stack<fn<void>>> _readers_buf;
-    alignas(64) atomic<stack<fn<void>>> _writers_buf;
-    alignas(64) atomic<stack<fn<void>>> _excepters_buf;
-    alignas(64) atomic<stack<fn<void>>> _timers_buf;
+    alignas(64) atomic<stack<fn<void()>>> _readers_buf;
+    alignas(64) atomic<stack<fn<void()>>> _writers_buf;
+    alignas(64) atomic<stack<fn<void()>>> _excepters_buf;
+    alignas(64) atomic<stack<fn<void()>>> _timers_buf;
     alignas(64) atomic<std::uint64_t> _cancelled_and_notifications;
 
     // single thread that waits on select
@@ -68,26 +68,26 @@ struct reactor {
         _cancelled_and_notifications.fetch_add(1, std::memory_order_release);
     }
     
-    void _when_able(int fd, fn<void> f, atomic<stack<fn<void>>> const& target) const {
+    void _when_able(int fd, fn<void()> f, atomic<stack<fn<void()>>> const& target) const {
         f->_fd = fd;
         target.push(std::move(f));
         _notify();
     }
     
-    void when_readable(int fd, fn<void> f) const {
+    void when_readable(int fd, fn<void()> f) const {
         _when_able(fd, std::move(f), _readers_buf);
     }
 
-    void when_writeable(int fd, fn<void> f) const {
+    void when_writeable(int fd, fn<void()> f) const {
         _when_able(fd, std::move(f), _writers_buf);
     }
     
-    void when_exceptional(int fd, fn<void> f) const {
+    void when_exceptional(int fd, fn<void()> f) const {
         _when_able(fd, std::move(f), _excepters_buf);
     }
         
     template<typename TimePoint>
-    void when(TimePoint&& t, fn<void> f) const {
+    void when(TimePoint&& t, fn<void()> f) const {
         f->_t = t;
         _timers_buf.push(std::move(f));
         _notify();
@@ -102,18 +102,18 @@ struct reactor {
     void _run() const {
         
         struct cmp_t {
-            bool operator()(const fn<void>& a,
-                            const fn<void>& b) {
+            bool operator()(const fn<void()>& a,
+                            const fn<void()>& b) {
                 return a->_t > b->_t; // <-- reverse order puts earliest at top of priority queue
             }
         };
         
-        atomic<stack<fn<void>>> readers;
-        atomic<stack<fn<void>>> writers;
-        atomic<stack<fn<void>>> excepters;
-        std::priority_queue<fn<void>, std::vector<fn<void>>, cmp_t> timers;
+        atomic<stack<fn<void()>>> readers;
+        atomic<stack<fn<void()>>> writers;
+        atomic<stack<fn<void()>>> excepters;
+        std::priority_queue<fn<void()>, std::vector<fn<void()>>, cmp_t> timers;
         
-        atomic<stack<fn<void>>> pending;
+        atomic<stack<fn<void()>>> pending;
         std::vector<char> buf;
         
         int count = 0; // <-- the number of events observed by select
@@ -174,7 +174,7 @@ struct reactor {
             }
             int maxfd = _pipe[0];
 
-            auto process = [&](atomic<stack<fn<void>>>& list, fd_set* set) -> fd_set* {
+            auto process = [&](atomic<stack<fn<void()>>>& list, fd_set* set) -> fd_set* {
                 for (auto i = list.begin(); i != list.end(); ) {
                     int fd = i->_fd;
                     if (count && FD_ISSET(fd, set)) {
@@ -200,7 +200,7 @@ struct reactor {
             auto now = std::chrono::steady_clock::now();
             
             while ((!timers.empty()) && (timers.top()->_t <= now)) {
-                pending.push(std::move(const_cast<fn<void>&>(timers.top())));
+                pending.push(std::move(const_cast<fn<void()>&>(timers.top())));
                 timers.pop();
             }
             if (!timers.empty()) {

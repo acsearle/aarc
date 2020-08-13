@@ -30,12 +30,12 @@ struct dual {
     alignas(64) atomic<u64> _head;
     alignas(64) atomic<u64> _tail;
         
-    static detail::node<void> const* ptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void> const*>(x & PTR); }
-    static detail::node<void>* mptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void>*>(x & PTR); }
+    static detail::node<void()> const* ptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void()> const*>(x & PTR); }
+    static detail::node<void()>* mptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void()>*>(x & PTR); }
     static u64 cnt(u64 x) { return (x >> 48) + 1; }
     
     dual() {
-        auto p = new detail::node<void>;
+        auto p = new detail::node<void()>;
         p->_next = 0;
         p->_count = 0x0000'0000'00002'0000;
         auto v = CNT | reinterpret_cast<u64>(p);
@@ -185,7 +185,7 @@ struct dual {
     }
     
     
-    void push(fn<void> x) const {
+    void push(fn<void()> x) const {
 
         // over the lifetime of the queue node,
         //     weight 0xFFFF is placed in _tail
@@ -212,7 +212,7 @@ struct dual {
     }
     
     void pop() const {
-        auto a = new detail::node<void>;
+        auto a = new detail::node<void()>;
         a->_next = 0;
         a->_count = 0x0000'0000'0001'0001;
         a->_promise = 0;
@@ -231,12 +231,12 @@ struct dual {
     }
     
     [[noreturn]] void pop_forever() const {
-        detail::node<void>* a; // <-- the node containing our promise
+        detail::node<void()>* a; // <-- the node containing our promise
         u64 b;                 // <-- the counted ptr to same
         u64 c;                 // <-- the counted ptr to a task we popped
         
     _construct_promise:
-        a = new detail::node<void>;
+        a = new detail::node<void()>;
         a->_next = 0;
         a->_count = 0x0000'0000'0001'0001;
         a->_promise = 0;

@@ -23,7 +23,7 @@
 
 struct pool {
     
-    alignas(64) atomic<stack<fn<void>>> _stack;
+    alignas(64) atomic<stack<fn<void()>>> _stack;
     alignas(64) atomic<bool> _cancelled;
     std::vector<std::thread> _threads;
 
@@ -65,21 +65,21 @@ struct pool {
         return p;
     }
     
-    void _submit_one(fn<void> f) const {
+    void _submit_one(fn<void()> f) const {
         if (_stack.push(std::move(f)))
             _stack.notify_one();
     }
     
-    void _submit_many(atomic<stack<fn<void>>> s) const {
+    void _submit_many(atomic<stack<fn<void()>>> s) const {
         if (_stack.splice(std::move(s)))
             _stack.notify_one();
     }
 
-    static void submit_one(fn<void> f) {
+    static void submit_one(fn<void()> f) {
         _get()._submit_one(std::move(f));
     }
     
-    static void submit_many(atomic<stack<fn<void>>> s) {
+    static void submit_many(atomic<stack<fn<void()>>> s) {
         _get()._submit_many(std::move(s));
     }
         

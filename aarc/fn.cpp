@@ -13,12 +13,12 @@
 TEST_CASE("fn", "[fn]") {
 
     {
-        fn<void> a;
+        fn<void()> a;
         REQUIRE_FALSE((bool) a);
     }
     {
         bool b = false;
-        auto a = fn<bool>([&] {
+        auto a = fn<bool()>([&] {
             return b = true;
         });
         REQUIRE(((bool) a));
@@ -31,10 +31,10 @@ TEST_CASE("fn", "[fn]") {
     {
         int i = 0;
         int j = 1;
-        auto a = fn<void>([&i, j]() mutable {
+        auto a = fn<void()>([&i, j]() mutable {
             j = (i += j);
         });
-        fn<void> b;
+        fn<void()> b;
         REQUIRE(a);
         REQUIRE_FALSE(b);
         b = std::move(a);

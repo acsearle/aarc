@@ -38,8 +38,11 @@ struct successible {
     atomic<u64> _next;
 };
 
-template<typename R>
-struct alignas(16) node : successible {
+template<typename T>
+struct node;
+
+template<typename R, typename... Args>
+struct alignas(16) node<R(Args...)> : successible {
     
     //
     // layout:
@@ -78,13 +81,13 @@ struct alignas(16) node : successible {
 
     virtual ~node() noexcept = default;
     
-    virtual R mut_call() { abort(); }
+    virtual R mut_call(Args...) { abort(); }
     virtual void erase() const noexcept {}
-    virtual R mut_call_and_erase() { abort(); }
+    virtual R mut_call_and_erase(Args...) { abort(); }
     virtual void erase_and_delete() const noexcept { delete this; }
     virtual void erase_and_release(u64 n) const noexcept { release(n); }
-    virtual R mut_call_and_erase_and_delete() { abort(); }
-    virtual R mut_call_and_erase_and_release(u64 n) { abort(); }
+    virtual R mut_call_and_erase_and_delete(Args...) { abort(); }
+    virtual R mut_call_and_erase_and_release(u64 n, Args...) { abort(); }
 
     virtual u64 try_clone() const {
         auto v = reinterpret_cast<u64>(new node);
@@ -94,20 +97,21 @@ struct alignas(16) node : successible {
 
 }; // node
 
-template<typename R, typename T>
-struct wrapper final : node<R> {
-    
-    static_assert(sizeof(node<R>) == 32);
-    
+template<typename F, typename T>
+struct wrapper;
+
+template<typename R, typename... Args, typename T>
+struct wrapper<R(Args...), T> final : node<R(Args...)> {
+        
     maybe<T> _payload;
                 
     virtual ~wrapper() noexcept override final = default;
     
-    virtual R mut_call() override final {
+    virtual R mut_call(Args... args) override final {
         if constexpr (std::is_same_v<R, void>) {
-            _payload.get()();
+            _payload.get()(std::forward<Args>(args)...);
         } else {
-            return _payload.get()();
+            return _payload.get()(std::forward<Args>(args)...);
         }
     }
     
@@ -115,12 +119,12 @@ struct wrapper final : node<R> {
         _payload.erase();
     }
     
-    virtual R mut_call_and_erase() override final try {
+    virtual R mut_call_and_erase(Args... args) override final try {
         if constexpr (std::is_same_v<R, void>) {
-            _payload.get()();
+            mut_call(std::forward<Args>(args)...);
             erase(); // <-- nonvirtual because final
         } else {
-            R r{_payload.get()()};
+            R r{mut_call(std::forward<Args>(args)...)};
             erase();
             return r; // <-- "this" is now invalid but r is a stack variable
         }
@@ -139,13 +143,13 @@ struct wrapper final : node<R> {
         this->release(n); // <-- encourage inlined destructor as part of same call
     };
 
-    virtual R mut_call_and_erase_and_delete() override final try {
+    virtual R mut_call_and_erase_and_delete(Args... args) override final try {
         if constexpr (std::is_same_v<R, void>) {
-            _payload.get()();
+            mut_call(std::forward<Args>(args)...);;
             erase_and_delete(); // <-- nonvirtual because final
             return;
         } else {
-            R r{_payload.get()()};
+            R r{mut_call(std::forward<Args>(args)...)};
             erase_and_delete();
             return r; // <-- "this" is now invalid but r is a stack variable
         }
@@ -154,13 +158,13 @@ struct wrapper final : node<R> {
         throw;
     }
 
-    virtual R mut_call_and_erase_and_release(u64 n) override final try {
+    virtual R mut_call_and_erase_and_release(u64 n, Args... args) override final try {
         if constexpr (std::is_same_v<R, void>) {
-            _payload.get()();
+            mut_call(std::forward<Args>(args)...);
             erase_and_release(n); // <-- nonvirtual because final
             return;
         } else {
-            R r{_payload.get()()};
+            R r{mut_call(std::forward<Args>(args)...)};
             erase_and_release(n);
             return r; // <-- "this" is now invalid but r is a stack variable
         }
@@ -186,16 +190,18 @@ struct wrapper final : node<R> {
 
 } // namespace detail
 
-template<typename R>
-struct fn {
+template<typename> struct fn;
+
+template<typename R, typename... Args>
+struct fn<R(Args...)> {
 
     static constexpr auto PTR = detail::PTR;
     static constexpr auto TAG = detail::TAG;
 
     u64 _value;
 
-    static detail::node<R>* ptr(u64 v) {
-        return reinterpret_cast<detail::node<R>*>(v & PTR);
+    static detail::node<R(Args...)>* ptr(u64 v) {
+        return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
     }
     
     fn()
@@ -211,7 +217,7 @@ struct fn {
 
     template<typename T, typename = std::void_t<decltype(std::declval<T>()())>>
     fn(T f) {
-        auto p = new detail::wrapper<R, T>;
+        auto p = new detail::wrapper<R(Args...), T>;
         p->_payload.emplace(std::forward<T>(f));
         _value = reinterpret_cast<u64>(p);
         assert(!(_value & ~PTR));
@@ -254,15 +260,15 @@ struct fn {
         return *this;
     }
     
-    R operator()() {
+    R operator()(Args... args) {
         auto p = ptr(_value);
         assert(p);
         _value = 0;
         if constexpr (std::is_same_v<R, void>) {
-            p->mut_call_and_erase_and_delete();
+            p->mut_call_and_erase_and_delete(std::forward<Args>(args)...);
             return;
         } else {
-            R r(p->mut_call_and_erase_and_delete());
+            R r{p->mut_call_and_erase_and_delete(std::forward<Args>(args)...)};
             return r;
         }
     }
@@ -275,11 +281,11 @@ struct fn {
         return _value & detail::TAG;
     }
         
-    detail::node<R>* operator->() {
+    detail::node<R(Args...)>* operator->() {
         return ptr(_value);
     }
 
-    detail::node<R> const* operator->() const {
+    detail::node<R(Args...)> const* operator->() const {
         return ptr(_value);
     }
 

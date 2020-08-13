@@ -23,7 +23,7 @@ class atomic {
     
 public:
     
-    atomic() = default;
+    atomic() : _value() {}
     
     atomic(T x) : _value(x) {}
     

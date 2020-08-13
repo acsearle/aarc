@@ -14,17 +14,17 @@
 template<typename>
 struct stack;
 
-template<typename R>
-struct atomic<stack<fn<R>>> : detail::successible {
+template<typename R, typename... Args>
+struct atomic<stack<fn<R(Args...)>>> : detail::successible {
     
     static constexpr auto PTR = detail::PTR;
     
-    static detail::node<R> const* cptr(u64 v) {
-        return reinterpret_cast<detail::node<R> const*>(v & PTR);
+    static detail::node<R(Args...)> const* cptr(u64 v) {
+        return reinterpret_cast<detail::node<R(Args...)> const*>(v & PTR);
     }
 
-    static detail::node<R>* mptr(u64 v) {
-        return reinterpret_cast<detail::node<R>*>(v & PTR);
+    static detail::node<R(Args...)>* mptr(u64 v) {
+        return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
     }
 
     atomic()
@@ -58,7 +58,7 @@ struct atomic<stack<fn<R>>> : detail::successible {
         return *this;
     }
     
-    void push(fn<R> x) {
+    void push(fn<R(Args...)> x) {
         x->_next = _next;
         _next = x._value;
         x._value = 0;
@@ -75,11 +75,11 @@ struct atomic<stack<fn<R>>> : detail::successible {
         }
     }
     
-    fn<R> pop() {
-        fn<R> r{_next};
-        if (r)
-            _next = r->_next;
-        return r;
+    fn<R(Args...)> pop() {
+        fn<R(Args...)> tmp{_next};
+        if (tmp)
+            _next = tmp->_next;
+        return tmp;
     }
     
     bool empty() {
@@ -116,7 +116,7 @@ struct atomic<stack<fn<R>>> : detail::successible {
         return atomic{_next.exchange(std::exchange(x._next, 0), std::memory_order_acq_rel)};
     }
         
-    bool push(fn<R> x) const {
+    bool push(fn<R(Args...)> x) const {
         if (x) {
             u64 old = _next.load(std::memory_order_relaxed);
             x->_next = old;
@@ -189,11 +189,11 @@ struct atomic<stack<fn<R>>> : detail::successible {
             return tmp;
         }
         
-        detail::node<R>& operator*() {
+        detail::node<R(Args...)>& operator*() {
             return *mptr(_ptr->_next);
         }
         
-        detail::node<R>* operator->() {
+        detail::node<R(Args...)>* operator->() {
             return mptr(_ptr->_next);
         }
                 
@@ -220,14 +220,14 @@ struct atomic<stack<fn<R>>> : detail::successible {
     
     // erases element pointed to by iterator
     // after erasure, same iterator points at element after erased element
-    fn<R> erase(iterator it) {
-        return fn<R>{std::exchange(it._ptr->_next,
+    fn<R(Args...)> erase(iterator it) {
+        return fn<R(Args...)>{std::exchange(it._ptr->_next,
                                    mptr(it._ptr->_next)->_next)};
     }
     
     // inserts before element pointed to by iterator
     // after insertion, points at inserted element
-    void insert(iterator it, fn<R> x) {
+    void insert(iterator it, fn<R(Args...)> x) {
         x->_next = it._ptr->_next;
         it._ptr->_next = x._value;
         x._value = 0;
