@@ -71,7 +71,7 @@ struct dual {
         a = _tail.load(std::memory_order_relaxed);
     _acquire_tail:
         assert(a & PTR); // <-- _tail is never null (points to sentinel if empty)
-        if (!(a & CNT))
+        if (__builtin_expect(!(a & CNT), false))
             goto _wait_tail;
         assert(m == 0);
         assert(n == 0);
@@ -79,9 +79,8 @@ struct dual {
         if (!_tail.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed))
             goto _acquire_tail;
         m = 1;
-        if (!(a & b & CNT))
+        if (__builtin_expect(!(a & b & CNT), false))
             goto _replenish_tail;
-    
     _load_next:
         assert(m > 0);
         c = ptr(a)->_next.load(std::memory_order_acquire);
@@ -92,19 +91,22 @@ struct dual {
             goto _swing_tail;
         if (c & TAG)                             // <-- stack node
             goto _acquire_next;
-        assert(!"invalid state");
+        __builtin_trap();
         
         
     _push: // add the new node
-        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_release, std::memory_order_acquire))
+        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
             goto _classify_next;
         ptr(a)->release(m);
+        assert(n == 0);
         return 0;
         
         
     _swing_tail: // move stale tail forwards
         if (!_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_tail_failed;
+        if (__builtin_expect(!(b & CNT) && (c & CNT), false))  // <-- we happend to fix a counter
+            _tail.notify_all();
         ptr(a)->release(m + cnt(b));
         a = c;
         b = c;
@@ -127,14 +129,14 @@ struct dual {
         assert(c & CNT);
         d = c - INC;
         assert(m);
-        if (!ptr(a)->_next.compare_exchange_weak(c, d, std::memory_order_acquire, std::memory_order_acquire))
+        if (!ptr(a)->_next.compare_exchange_weak(c, d, std::memory_order_acquire, std::memory_order_relaxed))
             goto _classify_next;
         n = 1;
     _load_next_next:
         assert(n);
-        e = ptr(c)->_next.load(std::memory_order_acquire);
+        e = ptr(c)->_next.load(std::memory_order_relaxed);
     _swing_next:
-        if (!ptr(a)->_next.compare_exchange_weak(d, e, std::memory_order_release, std::memory_order_acquire))
+        if (!ptr(a)->_next.compare_exchange_weak(d, e, std::memory_order_acquire, std::memory_order_relaxed))
             goto _swing_next_failed;
         ptr(a)->release(m);
         assert(n == 1);
@@ -165,7 +167,7 @@ struct dual {
         ptr(a)->_count.fetch_add(LOW, std::memory_order_relaxed);
         m += LOW;
     _attempt_replenish_tail:
-        if (!_tail.compare_exchange_weak(b, CNT | b, std::memory_order_relaxed, std::memory_order_relaxed))
+        if (!_tail.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
             goto _replenish_failed;
         m -= LOW - (b >> 48);
         if (!(b & CNT)) // <-- we fixed an exhausted counter
@@ -219,14 +221,17 @@ struct dual {
         if ((c & ~PTR) == 0xFFFE'0000'0000'0000)
             goto _swing_head;
     _push: // <-- update _head->_next to push a stack node
-        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_release, std::memory_order_acquire))
+        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
             goto _classify_next;
         ptr(a)->release(m);
+        m = 0;
         return 0;
                         
     _swing_head: // <-- advance head to claim a queue node
         if (!_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_head_failed;
+        if (__builtin_expect(!(b & CNT) && (c & CNT), false)) // <-- we happend to fix a counter
+            _head.notify_all();
         ptr(a)->release(cnt(b) + m);
         return (c & ~CNT);
         
@@ -255,7 +260,7 @@ struct dual {
         ptr(a)->_count.fetch_add(LOW, std::memory_order_relaxed);
         m += LOW;
     _attempt_replenish_head:
-        if (!_head.compare_exchange_weak(b, CNT | b, std::memory_order_relaxed, std::memory_order_relaxed))
+        if (!_head.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
             goto _replenish_failed;
         m -= LOW - (b >> 48);
         if (!(b & CNT)) // <-- we fixed an exhausted counter
@@ -268,6 +273,7 @@ struct dual {
             goto _attempt_replenish_head;
     _replenish_failed_due_to_pointer_or_tag_change:
         ptr(a)->release(m);
+        m = 0;
         a = b;
         goto _acquire_head;
         
@@ -291,7 +297,7 @@ struct dual {
         x->_promise = 0;
         u64 c = _push(x._value);
         if (c) {
-            assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
+            //assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
             ptr(c)->_promise.store(x._value, std::memory_order_release);
             ptr(c)->_promise.notify_one();
             ptr(c)->release(cnt(c));
@@ -313,6 +319,7 @@ struct dual {
         } else {
             ptr(b)->_promise.wait(0, std::memory_order_relaxed);
             c = ptr(b)->_promise.load(std::memory_order_acquire);
+            assert(c & PTR);
             ptr(b)->release(1);
             mptr(c)->mut_call_and_erase_and_delete();
         }
@@ -502,8 +509,8 @@ TEST_CASE("dual-exhaust", "[dual]") {
             }
         });
     }
-    
-    for (decltype(n) i = 0; i != 1; ++i) {
+            
+    for (decltype(n) i = 0; i != 8; ++i) {
         int gen = 0x1FFFFF;
         y_combinator([&d, n, gen](auto& self) mutable -> void {
             //std::cout << std::this_thread::get_id() << '\n';
