@@ -36,10 +36,10 @@ struct reactor {
     // before the second task sees it)
             
     // buffers for recently-added waiters and timers
-    alignas(64) atomic<stack<fn<void()>>> _readers_buf;
-    alignas(64) atomic<stack<fn<void()>>> _writers_buf;
-    alignas(64) atomic<stack<fn<void()>>> _excepters_buf;
-    alignas(64) atomic<stack<fn<void()>>> _timers_buf;
+    alignas(64) stack<fn<void()>> _readers_buf;
+    alignas(64) stack<fn<void()>> _writers_buf;
+    alignas(64) stack<fn<void()>> _excepters_buf;
+    alignas(64) stack<fn<void()>> _timers_buf;
     alignas(64) atomic<std::uint64_t> _cancelled_and_notifications;
 
     // single thread that waits on select
@@ -68,7 +68,7 @@ struct reactor {
         _cancelled_and_notifications.fetch_add(1, std::memory_order_release);
     }
     
-    void _when_able(int fd, fn<void()> f, atomic<stack<fn<void()>>> const& target) const {
+    void _when_able(int fd, fn<void()> f, stack<fn<void()>> const& target) const {
         f->_fd = fd;
         target.push(std::move(f));
         _notify();
@@ -108,12 +108,12 @@ struct reactor {
             }
         };
         
-        atomic<stack<fn<void()>>> readers;
-        atomic<stack<fn<void()>>> writers;
-        atomic<stack<fn<void()>>> excepters;
+        stack<fn<void()>> readers;
+        stack<fn<void()>> writers;
+        stack<fn<void()>> excepters;
         std::priority_queue<fn<void()>, std::vector<fn<void()>>, cmp_t> timers;
         
-        atomic<stack<fn<void()>>> pending;
+        stack<fn<void()>> pending;
         std::vector<char> buf;
         
         int count = 0; // <-- the number of events observed by select
@@ -174,7 +174,7 @@ struct reactor {
             }
             int maxfd = _pipe[0];
 
-            auto process = [&](atomic<stack<fn<void()>>>& list, fd_set* set) -> fd_set* {
+            auto process = [&](stack<fn<void()>>& list, fd_set* set) -> fd_set* {
                 for (auto i = list.begin(); i != list.end(); ) {
                     int fd = i->_fd;
                     if (count && FD_ISSET(fd, set)) {

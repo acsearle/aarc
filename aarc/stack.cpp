@@ -13,11 +13,11 @@
 
 #include "catch.hpp"
 
-TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
+TEST_CASE("stack<fn<int>>", "[fn]") {
 
     {
         // mut
-        atomic<stack<fn<int()>>> a;
+        stack<fn<int()>> a;
         a.push(fn<int()>([] { return 1; }));
         a.push(fn<int()>([] { return 2; }));
         REQUIRE(a.pop()() == 2);
@@ -27,8 +27,8 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
     
     {
         // const
-        atomic<stack<fn<int()>>> z;
-        atomic<stack<fn<int()>>> const& a = z;
+        stack<fn<int()>> z;
+        stack<fn<int()>> const& a = z;
         a.push(fn<int()>([] { return 1; }));
         a.push(fn<int()>([] { return 2; }));
         auto b = a.take();
@@ -37,7 +37,7 @@ TEST_CASE("atomic<stack<fn<int>>>", "[fn]") {
         REQUIRE_FALSE(b.pop());
     }
     {
-        atomic<stack<fn<int()>>> a;
+        stack<fn<int()>> a;
         for (int i = 0; i != 10; ++i) {
             a.push(fn<int()>([i] { return i; }));
         }

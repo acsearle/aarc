@@ -130,14 +130,7 @@ struct Aarc {
         exchange(std::move(desired));
     }
     
-    bool compare_exchange_weak(Arc<T>& expected, Arc<T> desired) {
-        std::uint64_t x = _value.load(std::memory_order_relaxed);
-        std::uint64_t d = 0;
-        for (;;) {
-            
-        }
-        return true;
-    }
+    bool compare_exchange_weak(Arc<T>& expected, Arc<T> desired);
     
 };
 

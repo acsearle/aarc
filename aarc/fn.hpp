@@ -34,15 +34,13 @@ inline u64 cnt(u64 v) {
     return (v >> 48) + 1;
 }
 
-struct successible {
-    atomic<u64> _next;
-};
-
 template<typename T>
 struct node;
 
 template<typename R, typename... Args>
-struct alignas(16) node<R(Args...)> : successible {
+struct alignas(16) node<R(Args...)> {
+    
+    inline static const atomic<u64> _extant{0};
     
     //
     // layout:
@@ -52,6 +50,7 @@ struct alignas(16) node<R(Args...)> : successible {
     // 16: _count
     // 24: { _fd, _flags } + _t + _promise
         
+    atomic<u64> _next;
     atomic<u64> _count;
         
     union {
@@ -64,36 +63,47 @@ struct alignas(16) node<R(Args...)> : successible {
     };
     
     node()
-    : successible{0}
+    : _next{0}
     , _count{0}
     , _promise{0} {
+        _extant.fetch_add(1, std::memory_order_relaxed);
     }
-        
-    void release(u64 n) const {
-        auto m = _count.fetch_sub(n, std::memory_order_release);
-        assert(m >= n);
-        if (m == n) {
-            [[maybe_unused]] auto z = _count.load(std::memory_order_acquire); // <-- read to synchronize with release on other threads
-            assert(z == 0);
-            delete this;
-        }
-    }
-
-    virtual ~node() noexcept = default;
     
-    virtual R mut_call(Args...) { abort(); }
-    virtual void erase() const noexcept {}
-    virtual R mut_call_and_erase(Args...) { abort(); }
-    virtual void erase_and_delete() const noexcept { delete this; }
-    virtual void erase_and_release(u64 n) const noexcept { release(n); }
-    virtual R mut_call_and_erase_and_delete(Args...) { abort(); }
-    virtual R mut_call_and_erase_and_release(u64 n, Args...) { abort(); }
+    node(node const&) = delete;
+            
+    virtual ~node() noexcept {
+        auto n = _extant.fetch_sub(1, std::memory_order_relaxed);
+        assert(n > 0);
+    }
+    
+    node& operator=(node const&) = delete;
 
     virtual u64 try_clone() const {
         auto v = reinterpret_cast<u64>(new node);
         assert(!(v & ~PTR));
         return v;
     }
+
+    void release(u64 n) const {
+        auto m = _count.fetch_sub(n, std::memory_order_release);
+        assert(m >= n);
+        printf("released %p to 0x%0.5llx (-0x%0.5llx)%s\n", this, m - n, n, (m == n) ? " <--" : "");
+        if (m == n) {
+            [[maybe_unused]] auto o = _count.load(std::memory_order_acquire); // <-- read to synchronize with release on other threads
+            assert(o == 0);
+            delete this;
+        }
+    }
+
+    virtual R mut_call(Args...) { abort(); }
+    virtual void erase() const noexcept {}
+
+    virtual void erase_and_delete() const noexcept { delete this; }
+    virtual void erase_and_release(u64 n) const noexcept { release(n); }
+    
+    virtual R mut_call_and_erase(Args...) { abort(); }
+    virtual R mut_call_and_erase_and_delete(Args...) { abort(); }
+    virtual R mut_call_and_erase_and_release(u64 n, Args...) { abort(); }
 
 }; // node
 

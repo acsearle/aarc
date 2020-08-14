@@ -45,10 +45,10 @@ struct dual {
     
     u64 _push(u64 z) const {
         
-        assert((z & ~PTR) == 0xFFFE'0000'0000'0000);
-        assert(ptr(z));
-        assert(ptr(z)->_next.load(std::memory_order_relaxed) == 0);
-        assert(ptr(z)->_count.load(std::memory_order_relaxed) == 0x2'0000);
+        //assert((z & ~PTR) == 0xFFFE'0000'0000'0000);
+        assert(mptr(z));
+        assert(mptr(z)->_next == 0);
+        //assert(ptr(z)->_count.load(std::memory_order_relaxed) == 0x2'0000);
         
         u64 a; // <-- old value of _tail
         u64 b; // <-- new value of _tail
@@ -81,7 +81,9 @@ struct dual {
     _push: // add the new node
         if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_release, std::memory_order_acquire))
             goto _classify_next;
+        // printf("    empty --> queue\n");
         // tail is now stale
+        ptr(a)->release(1);
         return 0;
         
         
@@ -117,6 +119,7 @@ struct dual {
         if (!ptr(a)->_next.compare_exchange_weak(d, e, std::memory_order_release, std::memory_order_acquire))
             goto _swing_next_failed;
         ptr(a)->release(1);
+        printf("c = %p\n", (void*) c);
         return c;
     
     _swing_next_failed:
@@ -138,8 +141,9 @@ struct dual {
         assert(z & CNT);
         assert(z & PTR);
         assert(z & TAG);
-        assert(ptr(z)->_count.load(std::memory_order_relaxed) >= ((z >> 48) + 1));
-        
+        // assert(ptr(z)->_count.load(std::memory_order_relaxed) > cnt(z));
+        printf("installed z = %p\n", (void*) z);
+
         u64  a; // <-- old value of _head
         u64  b; // <-- new value of _head
         u64& c  // <-- old value of _head->_next
@@ -161,6 +165,9 @@ struct dual {
     _push: // <-- update _head->_next to push a stack node
         if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_release, std::memory_order_acquire))
             goto _classify_next;
+        //if (!c)
+        //    printf("    empty --> stack\n");
+        printf("installed z = %p\n", (void*) z);
         ptr(a)->release(1);
         return 0;
                         
@@ -202,10 +209,12 @@ struct dual {
         x->_promise = 0;
         u64 c = _push(x._value);
         if (c) {
+            printf("  c = 0x%0.16llx\n", c);
             // send the task to the thread we found waiting
             assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
             ptr(c)->_promise.store(x._value, std::memory_order_release);
             ptr(c)->_promise.notify_one();
+            printf("releasing promise %p remote\n", ptr(c));
             ptr(c)->release(cnt(c));
         }
         x._value = 0;
@@ -217,7 +226,9 @@ struct dual {
         a->_count = 0x0000'0000'0001'0001;
         a->_promise = 0;
         u64 b = reinterpret_cast<u64>(a);
+        printf("b is %p\n", (void*) b);
         b |= 0xFFFF'0000'0000'0001;
+        assert(a->_count == cnt(b) + 1);
         u64 c = _pop(b);
         if (c) {
             delete ptr(b);
@@ -225,23 +236,27 @@ struct dual {
         } else {
             ptr(b)->_promise.wait(0, std::memory_order_relaxed);
             c = ptr(b)->_promise.load(std::memory_order_acquire);
+            printf("releasing promise %p local\n", ptr(b));
             ptr(b)->release(1);
             mptr(c)->mut_call_and_erase_and_delete();
         }
     }
     
     [[noreturn]] void pop_forever() const {
-        detail::node<void()>* a; // <-- the node containing our promise
+                               
+        std::unique_ptr<detail::node<void()>> // <-- for exception safety
+            a;                 // <-- the node containing our promise
         u64 b;                 // <-- the counted ptr to same
         u64 c;                 // <-- the counted ptr to a task we popped
         
     _construct_promise:
-        a = new detail::node<void()>;
+        a.reset(new detail::node<void()>);
         a->_next = 0;
         a->_count = 0x0000'0000'0001'0001;
         a->_promise = 0;
-        b = reinterpret_cast<u64>(a);
+        b = reinterpret_cast<u64>(a.get());
         b |= 0xFFFF'0000'0000'0001;
+        assert(a->_count == cnt(b) + 1);
     _submit_promise:
         c = _pop(b);
         if (!c)
@@ -250,9 +265,11 @@ struct dual {
         goto _submit_promise;
         
     _wait_on_promise:
+        /* yesdiscard */ a.release();
         ptr(b)->_promise.wait(0, std::memory_order_relaxed);
         c = ptr(b)->_promise.load(std::memory_order_acquire);
         assert(c);
+        printf("release promise %p local\n", ptr(b));
         ptr(b)->release(1);
         mptr(c)->mut_call_and_erase_and_delete();
         goto _construct_promise;
@@ -279,23 +296,56 @@ TEST_CASE("dual", "[dual]") {
     a.pop();
     REQUIRE(z == 3);
     
-    /*
-    REQUIRE(a.pop() ==  7);
-    REQUIRE(a.pop() == -2); // <-- will consume 8
-    a.push( 8);             // <-- matched with unfulfilled pop
-    a.push( 9);
-    REQUIRE(a.pop() ==  9);
-    REQUIRE(a.pop() == -2); // <-- will consume 11
-    REQUIRE(a.pop() == -2); // <-- will consume 10
-    a.push(10);             // <-- matched with unfulfilled pop
-    a.push(11);             // <-- matched with unfulfilled pop
-    a.push(12);
-    a.push(13);
-    a.push(14);
-    REQUIRE(a.pop() == 12);
-    REQUIRE(a.pop() == 13);
-    REQUIRE(a.pop() == 14);
-    REQUIRE(a.pop() == -2); // <-- unfulfilled
-     */
+}
+
+TEST_CASE("dual-multi", "[dual]") {
+    
+    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    
+    dual d;
+    auto n = std::thread::hardware_concurrency();
+    std::vector<std::thread> t;
+    const atomic<u64> a{0};
+    
+    // make some workers
+    for (decltype(n) i = 0; i != n; ++i) {
+        t.emplace_back([&] {
+            try {
+                d.pop_forever();
+            } catch (...) {
+                // interpret exceptions as quit signal
+            }
+        });
+    }
+    
+    // submit tasks to each set one bit of a u64
+    for (int i = 0; i != 64; ++i) {
+        d.push([&a, i] {
+            a.fetch_xor(1ull << i, std::memory_order_relaxed);
+            a.notify_one();
+            printf("set %.2d (%p)\n", i, &i);
+        });
+    }
+    // wait until all bits set
+    while (auto b = ~a.load(std::memory_order_relaxed)) {
+        printf("observed 0x%0.16llx\n", ~b);
+        a.wait(~b, std::memory_order_relaxed);
+    }
+    printf("observed 0xffffffffffffffff\n");
+    REQUIRE(true);
+
+    // submit kill jobs
+    for (decltype(n) i = 0; i != n; ++i) {
+        d.push([] { throw 0; });
+    }
+    
+    // join threads
+    while (!t.empty()) {
+        t.back().join();
+        t.pop_back();
+    }
+
+    
+    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
     
 }

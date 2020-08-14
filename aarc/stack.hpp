@@ -15,7 +15,7 @@ template<typename>
 struct stack;
 
 template<typename R, typename... Args>
-struct atomic<stack<fn<R(Args...)>>> : detail::successible {
+struct stack<fn<R(Args...)>> {
     
     static constexpr auto PTR = detail::PTR;
     
@@ -26,68 +26,70 @@ struct atomic<stack<fn<R(Args...)>>> : detail::successible {
     static detail::node<R(Args...)>* mptr(u64 v) {
         return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
     }
+    
+    atomic<u64> _head;
 
-    atomic()
-    : detail::successible{0} {
+    stack()
+    : _head{0} {
     }
     
-    explicit atomic(std::uint64_t v)
-    : detail::successible{v} {
+    explicit stack(std::uint64_t v)
+    : _head{v} {
     }
     
-    atomic(atomic const&) = delete;
-    atomic(atomic&& other)
-    : detail::successible{std::exchange(other._next, 0)} {
+    stack(stack const&) = delete;
+    stack(stack&& other)
+    : _head{std::exchange(other._head, 0)} {
     }
 
-    ~atomic() {
+    ~stack() {
         while (!empty())
             pop();
     }
     
     // mutable
     
-    void swap(atomic& other) {
+    void swap(stack& other) {
         using std::swap;
-        std::swap(_next, other._next);
+        std::swap(_head, other._head);
     }
     
-    atomic& operator=(atomic const&) = delete;
-    atomic& operator=(atomic&& other) {
-        atomic(std::move(other)).swap(*this);
+    stack& operator=(stack const&) = delete;
+    stack& operator=(stack&& other) {
+        stack{std::move(other)}.swap(*this);
         return *this;
     }
     
     void push(fn<R(Args...)> x) {
-        x->_next = _next;
-        _next = x._value;
+        x->_next = _head;
+        _head = x._value;
         x._value = 0;
     }
     
-    void splice(atomic x) {
-        auto p = mptr(x._next);
+    void splice(stack x) {
+        auto p = mptr(x._head);
         if (p) {
             while (auto q = mptr(p->_next))
                 p = q;
-            p->_next = _next;
-            _next = x._next;
-            x._next = 0;
+            p->_next = _head;
+            _head = x._head;
+            x._head = 0;
         }
     }
     
     fn<R(Args...)> pop() {
-        fn<R(Args...)> tmp{_next};
+        fn<R(Args...)> tmp{_head};
         if (tmp)
-            _next = tmp->_next;
+            _head = tmp->_next;
         return tmp;
     }
     
     bool empty() {
-        return !(_next & detail::PTR);
+        return !(_head & detail::PTR);
     }
     
     void reverse() {
-        atomic x;
+        stack x;
         while (!empty())
             x.push(pop());
         x.swap(*this);
@@ -101,26 +103,26 @@ struct atomic<stack<fn<R(Args...)>>> : detail::successible {
     }
     
     void clear() {
-        atomic{}.swap(*this);
+        stack{}.swap(*this);
     }
     
     // const
         
-    void store(atomic) = delete;
-    void store(atomic x) const {
+    void store(stack) = delete;
+    void store(stack x) const {
         exchange(std::move(x));
     }
     
-    atomic exchange(atomic x) = delete;
-    atomic exchange(atomic x) const {
-        return atomic{_next.exchange(std::exchange(x._next, 0), std::memory_order_acq_rel)};
+    stack exchange(stack x) = delete;
+    stack exchange(stack x) const {
+        return atomic{_head.exchange(std::exchange(x._next, 0), std::memory_order_acq_rel)};
     }
         
     bool push(fn<R(Args...)> x) const {
         if (x) {
-            u64 old = _next.load(std::memory_order_relaxed);
+            u64 old = _head.load(std::memory_order_relaxed);
             x->_next = old;
-            while (!_next.compare_exchange_weak(x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
+            while (!_head.compare_exchange_weak(x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
                 old = x->_next;
             x._value = 0;
             return !cptr(old); // <-- did we transition from empty to nonempty?
@@ -128,77 +130,77 @@ struct atomic<stack<fn<R(Args...)>>> : detail::successible {
         return false;
     }
     
-    bool splice(atomic x) const {
-        auto p = mptr(x._next);
+    bool splice(stack x) const {
+        auto p = mptr(x._head);
         if (p) {
             while (auto q = mptr(p->_next))
                 p = q;
-            u64 old = _next.load(std::memory_order_relaxed);
+            u64 old = _head.load(std::memory_order_relaxed);
             p->_next = old;
-            while (!_next.compare_exchange_weak(p->_next, x._next, std::memory_order_release, std::memory_order_relaxed))
+            while (!_head.compare_exchange_weak(p->_next, x._head, std::memory_order_release, std::memory_order_relaxed))
                 old = p->_next;
-            x._next = 0;
+            x._head = 0;
             return !cptr(old); // <-- did we transition from empty to nonempty?
         }
         return false;
     }
     
-    atomic take() = delete;
-    atomic take() const {
-        return atomic{_next.exchange(0, std::memory_order_acquire)};
+    stack take() = delete;
+    stack take() const {
+        return stack{_head.exchange(0, std::memory_order_acquire)};
     }
 
     void wait() = delete;
     void wait() const {
-        _next.wait(0, std::memory_order_acquire);
+        _head.wait(0, std::memory_order_acquire);
     }
     
     void notify_one() = delete;
     void notify_one() const {
-        _next.notify_one();
+        _head.notify_one();
     }
 
     void notify_all() = delete;
     void notify_all() const {
-        _next.notify_all();
+        _head.notify_all();
     }
 
-    atomic& unsafe_reference() = delete;
-    atomic& unsafe_reference() const {
-        return const_cast<atomic&>(*this);
+    stack& unsafe_reference() = delete;
+    stack& unsafe_reference() const {
+        return const_cast<stack&>(*this);
     }
         
     // iterators
     
+    struct sentinel {};
+    
     struct iterator {
         
-        struct sentinel {};
-
-        detail::successible* _ptr;
+        atomic<u64>* _ptr;
         
         iterator& operator++() {
             assert(_ptr);
-            _ptr = mptr(_ptr->_next);
+            _ptr = &mptr(*_ptr)->_next;
             return *this;
         }
         
         iterator operator++(int) {
             assert(_ptr);
             iterator tmp{_ptr};
-            _ptr = mptr(_ptr->_next);
+            operator++();
             return tmp;
         }
         
         detail::node<R(Args...)>& operator*() {
-            return *mptr(_ptr->_next);
+            return *mptr(*_ptr);
         }
         
         detail::node<R(Args...)>* operator->() {
-            return mptr(_ptr->_next);
+            return mptr(*_ptr);
         }
                 
         bool operator!=(iterator b) {
-            return (_ptr->_next ^ b._ptr->_next) & PTR;
+            return ((*_ptr) ^ (*b._ptr)) & PTR;
         }
         
         bool operator==(iterator b) {
@@ -206,7 +208,7 @@ struct atomic<stack<fn<R(Args...)>>> : detail::successible {
         }
         
         bool operator!=(sentinel) {
-            return _ptr->_next & PTR;
+            return *_ptr & PTR;
         }
         
         bool operator==(sentinel) {
@@ -215,21 +217,21 @@ struct atomic<stack<fn<R(Args...)>>> : detail::successible {
         
     };
     
-    iterator begin() { return iterator{this}; }
-    typename iterator::sentinel end() { return typename iterator::sentinel{}; }
+    iterator begin() { return iterator{&_head}; }
+    sentinel end() { return sentinel{}; }
     
     // erases element pointed to by iterator
     // after erasure, same iterator points at element after erased element
     fn<R(Args...)> erase(iterator it) {
-        return fn<R(Args...)>{std::exchange(it._ptr->_next,
-                                   mptr(it._ptr->_next)->_next)};
+        return fn<R(Args...)>{std::exchange(*it._ptr,
+                                   mptr(*it._ptr)->_next)};
     }
     
     // inserts before element pointed to by iterator
     // after insertion, points at inserted element
     void insert(iterator it, fn<R(Args...)> x) {
-        x->_next = it._ptr->_next;
-        it._ptr->_next = x._value;
+        x->_next = *it._ptr;
+        *it._ptr = x._value;
         x._value = 0;
     }
 

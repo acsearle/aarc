@@ -113,6 +113,8 @@
 				CA47C20424B708D300B9C828 /* catch.hpp */,
 				CA94A43224DE259E009B692E /* corrode.cpp */,
 				CA94A43324DE259E009B692E /* corrode.hpp */,
+				CA94A45624E5107F009B692E /* dual.cpp */,
+				CA94A45724E5107F009B692E /* dual.hpp */,
 				CA94A44124E2F3AA009B692E /* fn.cpp */,
 				CA94A44224E2F3AA009B692E /* fn.hpp */,
 				CA47C1FD24B7086100B9C828 /* main.cpp */,
@@ -128,8 +130,6 @@
 				CA94A43C24E15635009B692E /* reactor.hpp */,
 				CA94A44A24E4030A009B692E /* stack.cpp */,
 				CA94A44B24E4030A009B692E /* stack.hpp */,
-				CA94A45624E5107F009B692E /* dual.cpp */,
-				CA94A45724E5107F009B692E /* dual.hpp */,
 			);
 			path = aarc;
 			sourceTree = "<group>";
