@@ -87,7 +87,7 @@ struct alignas(16) node<R(Args...)> {
     void release(u64 n) const {
         auto m = _count.fetch_sub(n, std::memory_order_release);
         assert(m >= n);
-        printf("released %p to 0x%0.5llx (-0x%0.5llx)%s\n", this, m - n, n, (m == n) ? " <--" : "");
+        // printf("released %p to 0x%0.5llx (-0x%0.5llx)%s\n", this, m - n, n, (m == n) ? " <--" : "");
         if (m == n) {
             [[maybe_unused]] auto o = _count.load(std::memory_order_acquire); // <-- read to synchronize with release on other threads
             assert(o == 0);

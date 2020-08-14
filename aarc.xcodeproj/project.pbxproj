@@ -269,6 +269,7 @@
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-fcoroutines-ts",
+					"-D__NO_SPIN",
 				);
 				SDKROOT = macosx;
 			};
@@ -324,6 +325,7 @@
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(OTHER_CFLAGS)",
 					"-fcoroutines-ts",
+					"-D__NO_SPIN",
 				);
 				SDKROOT = macosx;
 			};
