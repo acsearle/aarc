@@ -12,6 +12,7 @@
 #include "atomic.hpp"
 #include "dual.hpp"
 #include "fn.hpp"
+#include "y.hpp"
 
 #include "catch.hpp"
 
@@ -105,7 +106,7 @@ struct dual {
     _swing_tail: // move stale tail forwards
         if (!_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_tail_failed;
-        if (__builtin_expect(!(b & CNT) && (c & CNT), false))  // <-- we happend to fix a counter
+        if (__builtin_expect(!(b & CNT) && (c & CNT), false))  // <-- we happened to fix a counter
             _tail.notify_all();
         ptr(a)->release(m + cnt(b));
         a = c;
@@ -131,24 +132,29 @@ struct dual {
         assert(m);
         if (!ptr(a)->_next.compare_exchange_weak(c, d, std::memory_order_acquire, std::memory_order_relaxed))
             goto _classify_next;
+        // the stack nodes should not be vulnerable to draining like _head and
+        // _tail are, because their decrement is followed by their unlinking,
+        // and their pops would have to be thwarted (by a promise push) tens of
+        // thousands of times
+        assert(c & d & CNT); // <-- if we hit this we need to implement refreshing for _tail->_next too
         n = 1;
     _load_next_next:
         assert(n);
         e = ptr(c)->_next.load(std::memory_order_relaxed);
-    _swing_next:
+    _pop_next:
         if (!ptr(a)->_next.compare_exchange_weak(d, e, std::memory_order_acquire, std::memory_order_relaxed))
-            goto _swing_next_failed;
+            goto _pop_next_failed;
         ptr(a)->release(m);
         assert(n == 1);
         assert(d + INC > d);
         return d + INC;
     
-    _swing_next_failed:
+    _pop_next_failed:
         if ((c ^ d) & PTR)
-            goto _swing_next_failed_due_to_pointer_change;
-        goto _swing_next;
+            goto _pop_next_failed_due_to_pointer_change;
+        goto _pop_next;
         
-    _swing_next_failed_due_to_pointer_change:
+    _pop_next_failed_due_to_pointer_change:
         ptr(c)->release(n);
         n = 0;
         c = d;
@@ -221,6 +227,7 @@ struct dual {
         if ((c & ~PTR) == 0xFFFE'0000'0000'0000)
             goto _swing_head;
     _push: // <-- update _head->_next to push a stack node
+        z = (z & ~TAG) | ((c & TAG) < TAG ? (c & TAG) + 1 : TAG); // <-- use tag bits to expose stack depth
         if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
             goto _classify_next;
         ptr(a)->release(m);
@@ -230,7 +237,7 @@ struct dual {
     _swing_head: // <-- advance head to claim a queue node
         if (!_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_head_failed;
-        if (__builtin_expect(!(b & CNT) && (c & CNT), false)) // <-- we happend to fix a counter
+        if (__builtin_expect(!(b & CNT) && (c & CNT), false)) // <-- we happened to fix a counter
             _head.notify_all();
         ptr(a)->release(cnt(b) + m);
         return (c & ~CNT);
@@ -297,6 +304,8 @@ struct dual {
         x->_promise = 0;
         u64 c = _push(x._value);
         if (c) {
+            // u64 depth = c & TAG;
+            //printf("pushed to %llu\n", depth);
             //assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
             ptr(c)->_promise.store(x._value, std::memory_order_release);
             ptr(c)->_promise.notify_one();
@@ -473,23 +482,6 @@ TEST_CASE("dual-multi", "[dual]") {
     
 }
 
-
-template<typename F>
-struct _y_combinator {
-    F _f;
-    
-    template<typename... Args>
-    decltype(auto) operator()(Args&&... args) {
-        return _f(*this, std::forward<Args>(args)...);
-    }
-    
-};
-
-template<typename F>
-auto y_combinator(F&& f) {
-    return _y_combinator<std::decay_t<F>>{std::forward<F>(f)};
-}
-
 TEST_CASE("dual-exhaust", "[dual]") {
     {
     printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
@@ -510,9 +502,9 @@ TEST_CASE("dual-exhaust", "[dual]") {
         });
     }
             
-    for (decltype(n) i = 0; i != 8; ++i) {
-        int gen = 0x1FFFFF;
-        y_combinator([&d, n, gen](auto& self) mutable -> void {
+    for (decltype(n) i = 0; i != 1; ++i) {
+        int gen = 0xFFFFF;
+        Y([&d, n, gen](auto& self) mutable -> void {
             //std::cout << std::this_thread::get_id() << '\n';
             if (gen--)
                 d.push(std::move(self));
@@ -533,3 +525,8 @@ TEST_CASE("dual-exhaust", "[dual]") {
     printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
     
 }
+
+// try_push (fails if no waiter found)
+// try_pop
+// defer - to local queue, process last job oneself if try_pop fails (or if we
+// know the queue is empty because pushing next-to-last-job returned a waiter
