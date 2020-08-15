@@ -56,33 +56,26 @@ struct dual {
     
     static std::pair<u64, u64> _acquire(atomic<u64> const& p, u64 expected) {
         for (;;) {
-            assert(expected & PTR);
-            if (__builtin_expect(!(expected & CNT), false)) {
-                p.wait(expected, std::memory_order_relaxed);
-                expected = p.load(std::memory_order_relaxed);
-            } else {
+            assert(expected & PTR); // <-- nonnull pointer bits
+            if (expected & CNT) { // <-- nonzero counter bits
                 u64 desired = expected - INC;
                 if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
                     if (expected & desired & CNT) {
-                        return {desired, 1};
-                    } else {
-                        // when the count crosses power of two boundaries, we replenish it
-                        ptr(expected)->_count.fetch_add(LOW,
-                                                        std::memory_order_relaxed);
-                        u64 m = 1 + LOW;
-                        do if (p.compare_exchange_weak(desired,
-                                                       CNT | desired,
-                                                       std::memory_order_release,
-                                                       std::memory_order_relaxed)) {
-                            m -= LOW - (desired >> 48);
-                            if (!(desired & CNT)) // <-- we fixed an exhausted counter
-                                p.notify_all();
-                            desired |= CNT;
-                            return{desired, m};
-                        } while (!((expected ^ desired) & PTR)); // <-- while the pointer is unchanged
-                        ptr(std::exchange(expected, desired))->release(std::exchange(m, 0));
+                        return {desired, 1}; // <-- fast path completes
+                    } else { // <-- counter is a power of two
+                        expected = desired;
+                        ptr(expected)->_count.fetch_add(LOW, std::memory_order_relaxed);
+                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
+                            if ((expected & CNT) == 0) // <-- we fixed an exhausted counter
+                                p.notify_all();        // <-- notify potential waiters
+                            return{desired, cnt(expected)};
+                        } while (!((expected ^ desired) & PTR)); // <-- while the pointer bits are unchanged
+                        ptr(desired)->release(1 + LOW); // <-- start over
                     }
                 }
+            } else { // <-- the counter is zero
+                p.wait(expected, std::memory_order_relaxed); // <-- until counter may have changed
+                expected = p.load(std::memory_order_relaxed);
             }
         }
     }
