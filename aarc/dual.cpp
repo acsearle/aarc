@@ -53,20 +53,29 @@ struct dual {
         _tail = v;
     }
     
-    
+    // bitwise idioms:
+    //
+    //               p & PTR <=> ptr(p) != nullptr
+    //           p ^ q & PTR <=> ptr(p) != ptr(q)
+    //     p & (p - 1) & CNT <=> cnt(p) == 2^n + 1
+    //              p &  CNT <=> cnt(p) > 1
+    //              p & ~CNT <=> cnt(p & ~CNT) == 1
+    //              p |  CNT <=> cnt(p |  CNT) == 0x1'0000
+    //              p -  INC <=> cnt(p -  INC) == cnt(p) - 1
+
     static std::pair<u64, u64> _acquire(atomic<u64> const& p, u64 expected) {
         for (;;) {
             assert(expected & PTR); // <-- nonnull pointer bits
-            if (expected & CNT) { // <-- nonzero counter bits
+            if (__builtin_expect(expected & CNT, true)) { // <-- nonzero counter bits
                 u64 desired = expected - INC;
                 if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
-                    if (expected & desired & CNT) {
+                    if (__builtin_expect(expected & desired & CNT, true)) {
                         return {desired, 1}; // <-- fast path completes
                     } else { // <-- counter is a power of two
                         expected = desired;
                         ptr(expected)->_count.fetch_add(LOW, std::memory_order_relaxed);
                         do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
-                            if ((expected & CNT) == 0) // <-- we fixed an exhausted counter
+                            if (__builtin_expect((expected & CNT) == 0, false)) // <-- we fixed an exhausted counter
                                 p.notify_all();        // <-- notify potential waiters
                             return{desired, cnt(expected)};
                         } while (!((expected ^ desired) & PTR)); // <-- while the pointer bits are unchanged
@@ -84,17 +93,17 @@ struct dual {
         assert(specific & PTR);
         u64 expected = specific;
         do {
-            if (expected & CNT) {
+            if (__builtin_expect(expected & CNT, true)) {
                 u64 desired = expected - INC;
-                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_acquire)) {
-                    if (expected & desired & CNT) {
+                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
+                    if (__builtin_expect(expected & desired & CNT, true)) {
                         assert(!((desired ^ specific) & PTR));
                         return {desired, 1}; // <-- fast path completes
                     } else { // <-- count is a power of two, perform housekeeping
                         expected = desired;
                         ptr(specific)->_count.fetch_add(LOW, std::memory_order_relaxed);
-                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_acquire)) {
-                            if ((expected & CNT) == 0) // <-- we fixed an exhausted counter
+                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
+                            if (__builtin_expect((expected & CNT) == 0, false)) // <-- we fixed an exhausted counter
                                 p.notify_all();        // <-- notify potential waiters
                             assert(!((desired ^ specific) & PTR));
                             return{desired, cnt(expected)};
@@ -104,7 +113,7 @@ struct dual {
                 }
             } else {
                 p.wait(expected, std::memory_order_relaxed);
-                expected = p.load(std::memory_order_acquire);
+                expected = p.load(std::memory_order_relaxed);
             }
         } while (!((expected ^ specific) & PTR));
         return {expected, 0};
@@ -116,8 +125,10 @@ struct dual {
             
             assert(!(z & ~PTR));
 
-            z |= 0xFFFE'0000'0000'0000;
+            mptr(z)->_next = 0;
+            mptr(z)->_promise = 0;
             mptr(z)->_count = 0x0000'0000'0002'0000;
+            z |= 0xFFFE'0000'0000'0000;
             assert(mptr(z)->_count == 2 * cnt(z) + 2);
             
             // over the lifetime of the node,
@@ -134,8 +145,6 @@ struct dual {
             // to _head or _tail (as when eagerly advancing _tail) can add its
             // weight to the write without overflowing the counter
 
-            mptr(z)->_next = 0;
-            mptr(z)->_promise = 0;
 
         }
                 
@@ -168,7 +177,7 @@ struct dual {
         
         
     _push: // add the new node (or, if there is no new node, we failed to try_pop a stack node)
-        if (z && !ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
+        if (z && !ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
             goto _classify_next;
         ptr(a)->release(m);
         assert(n == 0);
@@ -257,7 +266,7 @@ struct dual {
             z = (z & ~TAG) | ((c & TAG) < TAG ? (c & TAG) + 1 : TAG); // <-- use tag bits to track stack depth why not
             assert(z & TAG);
             mptr(z)->_next = c;
-            if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
+            if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
                 goto _classify_next;
         }
         ptr(a)->release(m);
@@ -502,8 +511,8 @@ TEST_CASE("dual-exhaust", "[dual]") {
         });
     }
             
-    for (decltype(n) i = 0; i != 4; ++i) {
-        int gen = 0x0FFFF;
+    for (decltype(n) i = 0; i != 8; ++i) {
+        int gen = 0xFFFFF;
         Y([&d, n, gen](auto& self) mutable -> void {
             //std::cout << std::this_thread::get_id() << '\n';
             if (gen--)
