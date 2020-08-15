@@ -55,54 +55,36 @@ struct dual {
     
     
     static std::pair<u64, u64> _acquire(atomic<u64> const& p, u64 expected) {
-        u64 b;
-        u64 m = 0;
-    
-    _acquire_tail:
-        assert(expected & PTR); // <-- _tail is never null (points to sentinel if empty)
-        if (__builtin_expect(!(expected & CNT), false))
-            goto _wait_tail;
-        assert(m == 0);
-        b = expected - INC;
-        if (!p.compare_exchange_weak(expected, b, std::memory_order_acquire, std::memory_order_relaxed))
-            goto _acquire_tail;
-        m = 1;
-        if (__builtin_expect(!(expected & b & CNT), false))
-            goto _replenish_tail;
-    _load_next:
-        return std::pair(b, m);
-        
-        
-    _wait_tail:
-        // the local count has been exhausted and we can't proceed until another
-        // thread either replenishes it or swings tail
-        p.wait(expected, std::memory_order_relaxed);
-    _load_tail:
-        expected = p.load(std::memory_order_relaxed);
-        goto _acquire_tail;
-        
-    _replenish_tail:
-        // when the local count crosses a power of two boundary, we try to
-        // replenish it from the global count
-        ptr(expected)->_count.fetch_add(LOW, std::memory_order_relaxed);
-        m += LOW;
-    _attempt_replenish_tail:
-        if (!p.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
-            goto _replenish_failed;
-        m -= LOW - (b >> 48);
-        if (!(b & CNT)) // <-- we fixed an exhausted counter
-            p.notify_all();
-        b |= CNT;
-        goto _load_next;
-    _replenish_failed:
-        if ((expected ^ b) & PTR)
-            goto _attempt_replenish_tail;
-    _replenish_failed_due_to_pointer_change:
-        ptr(expected)->release(m);
-        m = 0;
-        expected = b;
-        goto _acquire_tail;
-        
+        for (;;) {
+            assert(expected & PTR);
+            if (__builtin_expect(!(expected & CNT), false)) {
+                p.wait(expected, std::memory_order_relaxed);
+                expected = p.load(std::memory_order_relaxed);
+            } else {
+                u64 desired = expected - INC;
+                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
+                    if (expected & desired & CNT) {
+                        return {desired, 1};
+                    } else {
+                        // when the count crosses power of two boundaries, we replenish it
+                        ptr(expected)->_count.fetch_add(LOW,
+                                                        std::memory_order_relaxed);
+                        u64 m = 1 + LOW;
+                        do if (p.compare_exchange_weak(desired,
+                                                       CNT | desired,
+                                                       std::memory_order_release,
+                                                       std::memory_order_relaxed)) {
+                            m -= LOW - (desired >> 48);
+                            if (!(desired & CNT)) // <-- we fixed an exhausted counter
+                                p.notify_all();
+                            desired |= CNT;
+                            return{desired, m};
+                        } while (!((expected ^ desired) & PTR)); // <-- while the pointer is unchanged
+                        ptr(std::exchange(expected, desired))->release(std::exchange(m, 0));
+                    }
+                }
+            }
+        }
     }
     
     u64 _pop_promise_or_push_item(u64 z) const {
@@ -249,16 +231,9 @@ struct dual {
     _load_head:
         a = _head.load(std::memory_order_relaxed);
     _acquire_head:
-        assert(a & PTR); // <-- head can never be null
         assert(m == 0);
-        if (!(a & CNT))
-            goto _wait_head;
-        b = a - INC;
-        if (!_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed))
-            goto _acquire_head;
-        m = 1;
-        if (!(a & b & CNT))
-            goto _replenish_head;
+        std::tie(b, m) = _acquire(_head, a);
+        a = b;
     _load_next:
         assert(a & PTR);
         c = ptr(a)->_next.load(std::memory_order_acquire);
@@ -292,37 +267,6 @@ struct dual {
         goto _swing_head;
         
     _swing_head_failed_due_to_pointer_change:
-        ptr(a)->release(m);
-        m = 0;
-        a = b;
-        goto _acquire_head;
-
-        
-    _wait_head:
-        // the local count has been exhausted and we can't proceed until another
-        // thread either replenishes it or replaces _head
-        _head.wait(a, std::memory_order_relaxed);
-        goto _load_head;
-
-        
-    _replenish_head:
-        // when the local count crosses a power of two boundary, we try to
-        // replenish it from the global count
-        ptr(a)->_count.fetch_add(LOW, std::memory_order_relaxed);
-        m += LOW;
-    _attempt_replenish_head:
-        if (!_head.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
-            goto _replenish_failed;
-        m -= LOW - (b >> 48);
-        if (!(b & CNT)) // <-- we fixed an exhausted counter
-            _head.notify_all();
-        b |= CNT;
-        goto _load_next;
-    
-    _replenish_failed:
-        if (cmp(a, b))
-            goto _attempt_replenish_head;
-    _replenish_failed_due_to_pointer_or_tag_change:
         ptr(a)->release(m);
         m = 0;
         a = b;
@@ -547,7 +491,7 @@ TEST_CASE("dual-exhaust", "[dual]") {
         });
     }
             
-    for (decltype(n) i = 0; i != 8; ++i) {
+    for (decltype(n) i = 0; i != 4; ++i) {
         int gen = 0x0FFFF;
         Y([&d, n, gen](auto& self) mutable -> void {
             //std::cout << std::this_thread::get_id() << '\n';
