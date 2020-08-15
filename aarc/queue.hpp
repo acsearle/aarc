@@ -74,14 +74,14 @@ struct queue {
             alpha:
                 ptr = (node const*) (b & LO);
                 c = 0;
-                do if (ptr->_next.compare_exchange_weak(c, z, std::memory_order_release, std::memory_order_acquire)) {
+                do if (ptr->_next.compare_exchange_weak(c, z, std::memory_order_acq_rel, std::memory_order_acquire)) {
                     // we installed a new node
 
                     // we can try to eagerly swing the head here
                     // not clear if this is an optimization (we do less total work)
                     // or a pessimization (we increase contention on _tail)
                     z |= HI;
-                    do if (_tail.compare_exchange_weak(b, z, std::memory_order_release, std::memory_order_relaxed)) {
+                    do if (_tail.compare_exchange_weak(b, z, std::memory_order_acq_rel, std::memory_order_acquire)) {
                         // release tail's current count plus our one unit
                         _release(ptr, (b >> 48) + 2);
                         return;
@@ -93,7 +93,7 @@ struct queue {
                     
                 } while (!c);
                 // we failed to install the node and instead must swing tail to next
-                do if (_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed)) {
+                do if (_tail.compare_exchange_weak(b, c, std::memory_order_acq_rel, std::memory_order_acquire)) {
                     // we swung tail and are awarded one unit of ownership
                     _release(ptr, (b >> 48) + 2); // release old tail
                     a = b = c;

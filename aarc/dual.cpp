@@ -55,9 +55,33 @@ struct dual {
     
     u64 _push(u64 z) const {
         
-        assert(mptr(z));
-        assert(mptr(z)->_next == 0);
-        assert(mptr(z)->_count == (cnt(z) + 1) * 2);
+        if (z) {
+            
+            assert(!(z & ~PTR));
+
+            z |= 0xFFFE'0000'0000'0000;
+            mptr(z)->_count = 0x0000'0000'0002'0000;
+            assert(mptr(z)->_count == 2 * cnt(z) + 2);
+            
+            // over the lifetime of the node,
+            //
+            //           weight    FFFF is assigned to _tail
+            //           weight       1 is assigned to the thread that writes it to _tail
+            //           weight    FFFF is assigned to _head
+            //           weight       1 is assigned to the thread that writes it to _head
+            //                    -----
+            //     total weight   20000 is written to the count
+            //     local weight-1  FFFE is written to the handle
+            //
+            // a thread that does not want to retain the node after writing it
+            // to _head or _tail (as when eagerly advancing _tail) can add its
+            // weight to the write without overflowing the counter
+
+            mptr(z)->_next = 0;
+            mptr(z)->_promise = 0;
+
+        }
+        
         
         u64 a; // <-- old value of _tail
         u64 b; // <-- new value of _tail
@@ -86,17 +110,17 @@ struct dual {
         assert(m > 0);
         c = ptr(a)->_next.load(std::memory_order_acquire);
     _classify_next:
-        if (c == 0)                              // <-- end of queue
+        if (c == 0)     // <-- end of queue
             goto _push;
         if (!(c & TAG)) // <-- queue node
             goto _swing_tail;
-        if (c & TAG)                             // <-- stack node
+        if (c & TAG)    // <-- stack node
             goto _acquire_next;
         __builtin_trap();
         
         
-    _push: // add the new node
-        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
+    _push: // add the new node (or, if there is no new node, we failed to try_pop a stack node)
+        if (z && !ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
             goto _classify_next;
         ptr(a)->release(m);
         assert(n == 0);
@@ -192,18 +216,20 @@ struct dual {
         
     };
     
-    u64 _pop(u64 z) const {
+    [[nodiscard]] u64 _pop(u64 z = 0) const {
         
-        assert(z & CNT);
-        assert(z & PTR);
-        assert(z & TAG);
-        // check that we have kept some ownership of the node
-        assert(mptr(z)->_count > cnt(z));
+        if (z) {
+            assert(!(z & ~PTR));
+            mptr(z)->_next = 0;
+            mptr(z)->_count = 0x0000'0001'0000;
+            mptr(z)->_promise = 0;
+            z |= 0xFFFE'0000'0000'0000;
+            assert(mptr(z)->_count == cnt(z) + 1); // <-- submitter retains 1
+        }
 
         u64  a; // <-- old value of _head
         u64  b; // <-- new value of _head
-        u64& c  // <-- old value of _head->_next
-            = mptr(z)->_next;
+        u64  c; // <-- old value of _head->_next
         
         u64 m = 0;
         
@@ -224,12 +250,17 @@ struct dual {
         assert(a & PTR);
         c = ptr(a)->_next.load(std::memory_order_acquire);
     _classify_next:
-        if ((c & ~PTR) == 0xFFFE'0000'0000'0000)
+        assert(((c & PTR) && !(c & TAG)) == ((c & ~PTR) == 0xFFFE'0000'0000'0000));
+        if ((c & PTR) && !(c & TAG))
             goto _swing_head;
-    _push: // <-- update _head->_next to push a stack node
-        z = (z & ~TAG) | ((c & TAG) < TAG ? (c & TAG) + 1 : TAG); // <-- use tag bits to expose stack depth
-        if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
-            goto _classify_next;
+    _push: // <-- update _head->_next to push a stack node (or, if there is no stack node provided, try_pop has failed)
+        if (z) {
+            z = (z & ~TAG) | ((c & TAG) < TAG ? (c & TAG) + 1 : TAG); // <-- use tag bits to track stack depth why not
+            assert(z & TAG);
+            mptr(z)->_next = c;
+            if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_acquire))
+                goto _classify_next;
+        }
         ptr(a)->release(m);
         m = 0;
         return 0;
@@ -286,84 +317,76 @@ struct dual {
         
     }
     
+    // try_push fails if no threads are waiting
+    bool try_push(fn<void()>& x) const {
+        assert(x._value & PTR);
+        u64 waiter = _push(0); // aka try_pop_waiter
+        if (waiter) {
+            assert(waiter & PTR);
+            [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
+            ptr(waiter)->_promise.store(std::exchange(x._value, 0), std::memory_order_release);
+            ptr(waiter)->_promise.notify_one();
+            ptr(waiter)->release(cnt(waiter));
+        }
+        return (bool) waiter;
+    }
     
     void push(fn<void()> x) const {
-
-        // over the lifetime of the queue node,
-        //     weight 0xFFFF is placed in _tail
-        //     weight 0x0001 is awarded to the placer
-        //     weight 0xFFFF is placed in _head
-        //     weight 0x0001 is awarded to the placer
-        
-        assert(!(x._value & ~PTR));
-        x._value &= PTR;
-        assert(x);
-        x._value |= 0xFFFE'0000'0000'0000;
-        x->_next = 0;
-        x->_count = 0x0000'0000'0002'0000;
-        x->_promise = 0;
-        u64 c = _push(x._value);
-        if (c) {
-            // u64 depth = c & TAG;
-            //printf("pushed to %llu\n", depth);
-            //assert(ptr(c)->_promise.load(std::memory_order_relaxed) == 0);
-            ptr(c)->_promise.store(x._value, std::memory_order_release);
-            ptr(c)->_promise.notify_one();
-            ptr(c)->release(cnt(c));
-        }
-        x._value = 0;
-    }
-    
-    void pop() const {
-        auto a = new detail::node<void()>;
-        a->_next = 0;
-        a->_count = 0x0000'0000'0001'0001;
-        a->_promise = 0;
-        u64 b = reinterpret_cast<u64>(a) | 0xFFFF'0000'0000'0001;
-        assert(a->_count == cnt(b) + 1);
-        u64 c = _pop(b);
-        if (c) {
-            delete ptr(b);
-            mptr(c)->mut_call_and_erase_and_release(cnt(c));
+        assert(x._value & PTR);
+        u64 waiter = _push(x._value);
+        if (waiter) {
+            assert(waiter & PTR);
+            [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
+            ptr(waiter)->_promise.store(std::exchange(x._value, 0), std::memory_order_release);
+            ptr(waiter)->_promise.notify_one();
+            ptr(waiter)->release(cnt(waiter));
         } else {
-            ptr(b)->_promise.wait(0, std::memory_order_relaxed);
-            c = ptr(b)->_promise.load(std::memory_order_acquire);
-            assert(c & PTR);
-            ptr(b)->release(1);
-            mptr(c)->mut_call_and_erase_and_delete();
+            x._value = 0; // <-- we gave up ownership
         }
     }
     
-    [[noreturn]] void pop_forever() const {
-                               
-        std::unique_ptr<detail::node<void()>> // <-- for exception safety
-            a;                 // <-- the node containing our promise
-        u64 b;                 // <-- the counted ptr to same
-        u64 c;                 // <-- the counted ptr to a task we popped
-        
-    _construct_promise:
-        a.reset(new detail::node<void()>);
-        a->_next = 0;
-        a->_count = 0x0000'0000'0001'0001;
-        a->_promise = 0;
-        b = reinterpret_cast<u64>(a.get());
-        b |= 0xFFFF'0000'0000'0001;
-        assert(a->_count == cnt(b) + 1);
-    _submit_promise:
-        c = _pop(b);
-        if (!c)
-            goto _wait_on_promise;
-        mptr(c)->mut_call_and_erase_and_release(cnt(c));
-        goto _submit_promise;
-        
-    _wait_on_promise:
-        /* yesdiscard */ a.release();
-        ptr(b)->_promise.wait(0, std::memory_order_relaxed);
-        c = ptr(b)->_promise.load(std::memory_order_acquire);
-        assert(c);
-        ptr(b)->release(1);
-        mptr(c)->mut_call_and_erase_and_delete();
-        goto _construct_promise;
+    // if result is nonzero it MUST be erased and released
+    //
+    //    if (u64 task = x.try_pop())
+    //        mptr(task)->mut_call_and_erase_and_release
+    //
+    [[nodiscard]] u64 try_pop() const {
+        return _pop(0);
+    }
+    
+    void pop_and_call() const {
+        // a node containing a promise
+        std::unique_ptr<detail::node<void()>> promise{new detail::node<void()>};
+        u64 task = _pop((u64) promise.get());
+        if (task) {
+            mptr(task)->mut_call_and_erase_and_release(cnt(task));
+        } else {
+            detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
+            ptr->_promise.wait(0, std::memory_order_relaxed);
+            task = ptr->_promise.load(std::memory_order_acquire);
+            ptr->release(1);
+            assert(task);
+            mptr(task)->mut_call_and_erase_and_delete();
+        }
+    }
+    
+    [[noreturn]] void pop_and_call_forever() const {
+        // a node containing a promise
+        std::unique_ptr<detail::node<void()>> promise{new detail::node<void()>};
+        for (;;) {
+            u64 task = _pop((u64) promise.get());
+            if (task) {
+                mptr(task)->mut_call_and_erase_and_release(cnt(task));
+            } else {
+                detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
+                promise.reset(new detail::node<void()>);
+                ptr->_promise.wait(0, std::memory_order_relaxed);
+                task = ptr->_promise.load(std::memory_order_acquire);
+                ptr->release(1);
+                assert(task);
+                mptr(task)->mut_call_and_erase_and_delete();
+            }
+        }
     }
     
     
@@ -419,14 +442,14 @@ TEST_CASE("dual", "[dual]") {
     std::thread b;
     a.push([&] { z = 1; });
     REQUIRE(z == 0);
-    a.pop();
+    a.pop_and_call();
     REQUIRE(z == 1);
-    b = std::thread([&] { a.pop(); });
+    b = std::thread([&] { a.pop_and_call(); });
     a.push([&] { z = 2; });
     a.push([&] { z = 3; });
     b.join();
     REQUIRE(z == 2);
-    a.pop();
+    a.pop_and_call();
     REQUIRE(z == 3);
     }
     printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
@@ -446,7 +469,7 @@ TEST_CASE("dual-multi", "[dual]") {
     for (decltype(n) i = 0; i != n; ++i) {
         t.emplace_back([&] {
             try {
-                d.pop_forever();
+                d.pop_and_call_forever();
             } catch (...) {
                 // interpret exceptions as quit signal
             }
@@ -495,15 +518,15 @@ TEST_CASE("dual-exhaust", "[dual]") {
     for (decltype(n) i = 0; i != n; ++i) {
         t.emplace_back([&] {
             try {
-                d.pop_forever();
+                d.pop_and_call_forever();
             } catch (...) {
                 // interpret exceptions as quit signal
             }
         });
     }
             
-    for (decltype(n) i = 0; i != 1; ++i) {
-        int gen = 0xFFFFF;
+    for (decltype(n) i = 0; i != 8; ++i) {
+        int gen = 0x0FFFF;
         Y([&d, n, gen](auto& self) mutable -> void {
             //std::cout << std::this_thread::get_id() << '\n';
             if (gen--)
