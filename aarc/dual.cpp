@@ -53,7 +53,7 @@ struct dual {
         _tail = v;
     }
     
-    u64 _push(u64 z) const {
+    u64 _pop_promise_or_push_item(u64 z) const {
         
         if (z) {
             
@@ -216,7 +216,7 @@ struct dual {
         
     };
     
-    [[nodiscard]] u64 _pop(u64 z = 0) const {
+    [[nodiscard]] u64 _pop_item_or_push_promise(u64 z = 0) const {
         
         if (z) {
             assert(!(z & ~PTR));
@@ -320,7 +320,7 @@ struct dual {
     // try_push fails if no threads are waiting
     bool try_push(fn<void()>& x) const {
         assert(x._value & PTR);
-        u64 waiter = _push(0); // aka try_pop_waiter
+        u64 waiter = _pop_promise_or_push_item(0); // aka try_pop_waiter
         if (waiter) {
             assert(waiter & PTR);
             [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
@@ -333,7 +333,7 @@ struct dual {
     
     void push(fn<void()> x) const {
         assert(x._value & PTR);
-        u64 waiter = _push(x._value);
+        u64 waiter = _pop_promise_or_push_item(x._value);
         if (waiter) {
             assert(waiter & PTR);
             [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
@@ -351,13 +351,22 @@ struct dual {
     //        mptr(task)->mut_call_and_erase_and_release
     //
     [[nodiscard]] u64 try_pop() const {
-        return _pop(0);
+        return _pop_item_or_push_promise(0);
+    }
+    
+    bool try_pop_and_call() const {
+        u64 task = _pop_item_or_push_promise(0);
+        if (task) {
+            assert(task & PTR);
+            mptr(task)->mut_call_and_erase_and_release(cnt(task));
+        }
+        return task;
     }
     
     void pop_and_call() const {
         // a node containing a promise
         std::unique_ptr<detail::node<void()>> promise{new detail::node<void()>};
-        u64 task = _pop((u64) promise.get());
+        u64 task = _pop_item_or_push_promise((u64) promise.get());
         if (task) {
             mptr(task)->mut_call_and_erase_and_release(cnt(task));
         } else {
@@ -374,7 +383,7 @@ struct dual {
         // a node containing a promise
         std::unique_ptr<detail::node<void()>> promise{new detail::node<void()>};
         for (;;) {
-            u64 task = _pop((u64) promise.get());
+            u64 task = _pop_item_or_push_promise((u64) promise.get());
             if (task) {
                 mptr(task)->mut_call_and_erase_and_release(cnt(task));
             } else {
