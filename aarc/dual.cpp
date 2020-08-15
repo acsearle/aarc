@@ -80,6 +80,36 @@ struct dual {
         }
     }
     
+    static std::pair<u64, u64> _acquire_specific(atomic<u64> const& p, u64 const specific) {
+        assert(specific & PTR);
+        u64 expected = specific;
+        do {
+            if (expected & CNT) {
+                u64 desired = expected - INC;
+                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_acquire)) {
+                    if (expected & desired & CNT) {
+                        assert(!((desired ^ specific) & PTR));
+                        return {desired, 1}; // <-- fast path completes
+                    } else { // <-- count is a power of two, perform housekeeping
+                        expected = desired;
+                        ptr(specific)->_count.fetch_add(LOW, std::memory_order_relaxed);
+                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_acquire)) {
+                            if ((expected & CNT) == 0) // <-- we fixed an exhausted counter
+                                p.notify_all();        // <-- notify potential waiters
+                            assert(!((desired ^ specific) & PTR));
+                            return{desired, cnt(expected)};
+                        } while (!((expected ^ specific) & PTR)); // <-- while the pointer bits are unchanged
+                        ptr(specific)->release(1 + LOW); // <-- give up
+                    }
+                }
+            } else {
+                p.wait(expected, std::memory_order_relaxed);
+                expected = p.load(std::memory_order_acquire);
+            }
+        } while (!((expected ^ specific) & PTR));
+        return {expected, 0};
+    }
+    
     u64 _pop_promise_or_push_item(u64 z) const {
         
         if (z) {
@@ -169,27 +199,17 @@ struct dual {
         
         
     _acquire_next: // pop stack node
-        assert(c & CNT);
-        d = c - INC;
         assert(m);
-        if (!ptr(a)->_next.compare_exchange_weak(c, d, std::memory_order_acquire, std::memory_order_relaxed))
+        std::tie(c, n) = _acquire_specific(ptr(a)->_next, c);
+        if (n == 0)
             goto _classify_next;
-        // the stack nodes should not be vulnerable to draining like _head and
-        // _tail are, because their decrement is followed by their unlinking,
-        // and their pops would have to be thwarted (by a promise push) tens of
-        // thousands of times
-        assert(c & d & CNT); // <-- if we hit this we need to implement refreshing for _tail->_next too
-        n = 1;
-    _load_next_next:
-        assert(n);
         e = ptr(c)->_next.load(std::memory_order_relaxed);
     _pop_next:
-        if (!ptr(a)->_next.compare_exchange_weak(d, e, std::memory_order_acquire, std::memory_order_relaxed))
+        if (!ptr(a)->_next.compare_exchange_weak(d = c, e, std::memory_order_acquire, std::memory_order_relaxed))
             goto _pop_next_failed;
         ptr(a)->release(m);
-        assert(n == 1);
-        assert(d + INC > d);
-        return d + INC;
+        assert(c + (n << 48) > c);
+        return c + (n << 48);
     
     _pop_next_failed:
         if ((c ^ d) & PTR)
@@ -197,9 +217,7 @@ struct dual {
         goto _pop_next;
         
     _pop_next_failed_due_to_pointer_change:
-        ptr(c)->release(n);
-        n = 0;
-        c = d;
+        ptr(std::exchange(c, d))->release(std::exchange(n, 0));
         goto _classify_next;
         
     };
