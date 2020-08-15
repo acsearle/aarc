@@ -53,6 +53,58 @@ struct dual {
         _tail = v;
     }
     
+    
+    static std::pair<u64, u64> _acquire(atomic<u64> const& p, u64 expected) {
+        u64 b;
+        u64 m = 0;
+    
+    _acquire_tail:
+        assert(expected & PTR); // <-- _tail is never null (points to sentinel if empty)
+        if (__builtin_expect(!(expected & CNT), false))
+            goto _wait_tail;
+        assert(m == 0);
+        b = expected - INC;
+        if (!p.compare_exchange_weak(expected, b, std::memory_order_acquire, std::memory_order_relaxed))
+            goto _acquire_tail;
+        m = 1;
+        if (__builtin_expect(!(expected & b & CNT), false))
+            goto _replenish_tail;
+    _load_next:
+        return std::pair(b, m);
+        
+        
+    _wait_tail:
+        // the local count has been exhausted and we can't proceed until another
+        // thread either replenishes it or swings tail
+        p.wait(expected, std::memory_order_relaxed);
+    _load_tail:
+        expected = p.load(std::memory_order_relaxed);
+        goto _acquire_tail;
+        
+    _replenish_tail:
+        // when the local count crosses a power of two boundary, we try to
+        // replenish it from the global count
+        ptr(expected)->_count.fetch_add(LOW, std::memory_order_relaxed);
+        m += LOW;
+    _attempt_replenish_tail:
+        if (!p.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
+            goto _replenish_failed;
+        m -= LOW - (b >> 48);
+        if (!(b & CNT)) // <-- we fixed an exhausted counter
+            p.notify_all();
+        b |= CNT;
+        goto _load_next;
+    _replenish_failed:
+        if ((expected ^ b) & PTR)
+            goto _attempt_replenish_tail;
+    _replenish_failed_due_to_pointer_change:
+        ptr(expected)->release(m);
+        m = 0;
+        expected = b;
+        goto _acquire_tail;
+        
+    }
+    
     u64 _pop_promise_or_push_item(u64 z) const {
         
         if (z) {
@@ -81,8 +133,7 @@ struct dual {
             mptr(z)->_promise = 0;
 
         }
-        
-        
+                
         u64 a; // <-- old value of _tail
         u64 b; // <-- new value of _tail
         u64 c; // <-- old value of _tail->_next
@@ -95,17 +146,9 @@ struct dual {
     _load_tail:
         a = _tail.load(std::memory_order_relaxed);
     _acquire_tail:
-        assert(a & PTR); // <-- _tail is never null (points to sentinel if empty)
-        if (__builtin_expect(!(a & CNT), false))
-            goto _wait_tail;
         assert(m == 0);
-        assert(n == 0);
-        b = a - INC;
-        if (!_tail.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed))
-            goto _acquire_tail;
-        m = 1;
-        if (__builtin_expect(!(a & b & CNT), false))
-            goto _replenish_tail;
+        std::tie(b, m) = _acquire(_tail, a);
+        a = b;
     _load_next:
         assert(m > 0);
         c = ptr(a)->_next.load(std::memory_order_acquire);
@@ -183,36 +226,6 @@ struct dual {
         n = 0;
         c = d;
         goto _classify_next;
-        
-    _wait_tail:
-        // the local count has been exhausted and we can't proceed until another
-        // thread either replenishes it or swings tail
-        _tail.wait(a, std::memory_order_relaxed);
-        goto _load_tail;
-        
-        
-    _replenish_tail:
-        // when the local count crosses a power of two boundary, we try to
-        // replenish it from the global count
-        ptr(a)->_count.fetch_add(LOW, std::memory_order_relaxed);
-        m += LOW;
-    _attempt_replenish_tail:
-        if (!_tail.compare_exchange_weak(b, CNT | b, std::memory_order_release, std::memory_order_relaxed))
-            goto _replenish_failed;
-        m -= LOW - (b >> 48);
-        if (!(b & CNT)) // <-- we fixed an exhausted counter
-            _tail.notify_all();
-        b |= CNT;
-        goto _load_next;
-    _replenish_failed:
-        if ((a ^ b) & PTR)
-            goto _attempt_replenish_tail;
-    _replenish_failed_due_to_pointer_change:
-        ptr(a)->release(m);
-        m = 0;
-        a = b;
-        goto _acquire_tail;
-        
         
     };
     
