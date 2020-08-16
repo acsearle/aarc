@@ -13,6 +13,19 @@
 
 #include "atomic_wait.hpp"
 
+
+
+using u64 = std::uint64_t;
+using i64 = std::int64_t;
+
+template<std::size_t N>
+struct _uint_t;
+
+template<> struct _uint_t<8> { using type = std::uint8_t; };
+template<> struct _uint_t<16> { using type = std::uint16_t; };
+template<> struct _uint_t<32> { using type = std::uint32_t; };
+template<> struct _uint_t<64> { using type = std::uint64_t; };
+
 template<typename T>
 class atomic {
     
@@ -72,22 +85,7 @@ public:
     bool compare_exchange_strong(T& expected, T desired, std::memory_order success, std::memory_order failure) const {
         return _atomic.compare_exchange_strong(expected, desired, success, failure);
     }
-    
-    void wait(T, std::memory_order) noexcept = delete;
-    void wait(T old, std::memory_order order) const noexcept {
-        std::atomic_wait_explicit(&_atomic, old, order);
-    }
-    
-    void notify_one() noexcept = delete;
-    void notify_one() const noexcept {
-        std::atomic_notify_one(&_atomic);
-    }
-    
-    void notify_all() noexcept = delete;
-    void notify_all() const noexcept {
-        std::atomic_notify_all(&_atomic);
-    }
-    
+        
     T fetch_add(T, std::memory_order) = delete;
     T fetch_add(T x, std::memory_order order) const {
         return _atomic.fetch_add(x, order);
@@ -112,13 +110,40 @@ public:
     T fetch_xor(T x, std::memory_order order) const {
         return _atomic.fetch_xor(x, order);
     }
-
-    // escape hatch
     
-    T& unsafe_reference() = delete;
-    T& unsafe_reference() const {
-        return const_cast<T&>(_value);
+    void wait(T, std::memory_order) noexcept = delete;
+    void wait(T old, std::memory_order order) const noexcept {
+        if constexpr(std::is_integral_v<T> || std::is_pointer_v<T>) {
+            std::atomic_wait_explicit(&_atomic, old, order);
+        } else {
+            using U = typename _uint_t<sizeof(T) * 8>::type;
+            std::atomic_wait_explicit((std::atomic<U>*) &_atomic,
+                                      (U&) old,
+                                      order);
+        }
     }
+    
+    void notify_one() noexcept = delete;
+    void notify_one() const noexcept {
+        if constexpr(std::is_integral_v<T> || std::is_pointer_v<T>) {
+            std::atomic_notify_one(&_atomic);
+
+        } else {
+            using U = typename _uint_t<sizeof(T) * 8>::type;
+            std::atomic_notify_one((std::atomic<U>*) &_atomic);
+        }
+    }
+    
+    void notify_all() noexcept = delete;
+    void notify_all() const noexcept {
+        if constexpr(std::is_integral_v<T> || std::is_pointer_v<T>) {
+            std::atomic_notify_all(&_atomic);
+        } else {
+            using U = typename _uint_t<sizeof(T) * 8>::type;
+            std::atomic_notify_all((std::atomic<U>*) &_atomic);
+        }
+    }
+
 
 };
 

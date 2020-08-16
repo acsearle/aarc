@@ -14,7 +14,7 @@
 
 TEST_CASE("Queue") {
 
-    queue<int> a;
+    atomic<queue<int>> a;
     
     auto N = 1'000;
     auto M = 16;

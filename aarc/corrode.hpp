@@ -195,7 +195,7 @@ struct future {
     }
     
     T await_resume() {
-        return std::move(_continuation.promise()._value.get());
+        return std::move(_continuation.promise()._value.value);
     }
     
 };

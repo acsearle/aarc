@@ -119,9 +119,9 @@ struct wrapper<R(Args...), T> final : node<R(Args...)> {
     
     virtual R mut_call(Args... args) override final {
         if constexpr (std::is_same_v<R, void>) {
-            _payload.get()(std::forward<Args>(args)...);
+            _payload.value(std::forward<Args>(args)...);
         } else {
-            return _payload.get()(std::forward<Args>(args)...);
+            return _payload.value(std::forward<Args>(args)...);
         }
     }
     
@@ -186,7 +186,7 @@ struct wrapper<R(Args...), T> final : node<R(Args...)> {
     virtual u64 try_clone() const override final {
         if constexpr (std::is_copy_constructible_v<T>) {
             auto p = new wrapper;
-            p->_payload.emplace(_payload.get());
+            p->_payload.emplace(_payload.value);
             auto v = reinterpret_cast<u64>(p);
             assert(!(v & ~PTR));
             return (u64) p;

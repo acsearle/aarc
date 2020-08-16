@@ -8,6 +8,7 @@
 
 #include <iostream>
 #include <thread>
+#include <deque>
 
 #include "atomic.hpp"
 #include "dual.hpp"
@@ -22,6 +23,11 @@
 // when a task is pushed, it is matched with the youngest waiter, or enqueued
 // if there are no waiters.  when a thread pops, it is matched with the oldest
 // task, or becomes the youngest waiter
+//
+// tasks are handled in order, and that order is multi-thread well-defined
+//
+// if task submission is delayed until the end of the current job (as in
+// asio::dispatch), we can gain efficiency
 
 struct dual {
     
@@ -30,13 +36,19 @@ struct dual {
     static constexpr u64 TAG = detail::TAG;
     static constexpr u64 INC = detail::INC;
     static constexpr u64 LOW = 0x0000'0000'0000'FFFF;
+
+    inline thread_local static std::deque<fn<void()>> _continuations;
     
-    alignas(64) atomic<u64> _head;
-    alignas(64) atomic<u64> _tail;
-        
     // extract pointer
-    static detail::node<void()> const* ptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void()> const*>(x & PTR); }
-    static detail::node<void()>* mptr(u64 x) { assert(x & PTR); return reinterpret_cast<detail::node<void()>*>(x & PTR); }
+    static detail::node<void()> const* ptr(u64 x) {
+        assert(x & PTR);
+        return reinterpret_cast<detail::node<void()> const*>(x & PTR);
+    }
+    
+    static detail::node<void()>* mptr(u64 x) {
+        assert(x & PTR);
+        return reinterpret_cast<detail::node<void()>*>(x & PTR);
+    }
     
     // extract local count
     static u64 cnt(u64 x) { return (x >> 48) + 1; }
@@ -44,6 +56,9 @@ struct dual {
     // check for pointer-tag equality, ignoring counter
     static bool cmp(u64 a, u64 b) { return !((a ^ b) & ~CNT); }
     
+    alignas(64) atomic<u64> _head;
+    alignas(64) atomic<u64> _tail;
+            
     dual() {
         auto p = new detail::node<void()>;
         p->_next = 0;
@@ -52,6 +67,55 @@ struct dual {
         _head = v;
         _tail = v;
     }
+    
+    dual(dual const&) = delete;
+    
+    /*
+    dual(dual&& other)
+    : _head{std::exchange(other._head, 0)}
+    , _tail{std::exchange(other._tail, 0)} {
+    }
+     */
+    
+    ~dual() {
+        // no calls to push, pop etc. are active but it is possible that the
+        // nodes are still retained elswehere so we must destroy them properly
+        
+        // nodes that are retained aren't permitted to mutate _next (including
+        // reusing the nodes in another container) unless they have established
+        // unique ownership, i.e.
+        //     ptr(a)->_count.load(memory_order_acquire) == cnt(a)
+        
+        // advance tail
+        u64 a, b;
+        for (;;) {
+            a = _tail;
+            b = mptr(a)->_next;
+            if (!(b & ~TAG) || (b & TAG))
+                break;
+            _tail = b;
+            ptr(a)->release(cnt(a));
+            ptr(b)->release(1); // <-- coalesce this somehow?
+        }
+        // advance head
+        for (;;) {
+            a = _head;
+            b = mptr(a)->_next;
+            if (!(b & ~TAG) || (b & TAG))
+                break;
+            _head = b;
+            ptr(a)->release(cnt(a));
+            ptr(b)->erase_and_release(1);
+        }
+        // drain stack
+        while ((a = mptr(_tail)->_next)) {
+            mptr(_tail)->_next = mptr(mptr(_tail)->_next)->_next;
+            ptr(a)->release(cnt(a));
+        }
+        assert(ptr(_head) == ptr(_tail));
+        ptr(_head)->release(cnt(_head) + cnt(_tail));
+    }
+    
     
     // bitwise idioms:
     //
@@ -119,6 +183,8 @@ struct dual {
         return {expected, 0};
     }
     
+    
+    
     u64 _pop_promise_or_push_item(u64 z) const {
         
         if (z) {
@@ -144,7 +210,6 @@ struct dual {
             // a thread that does not want to retain the node after writing it
             // to _head or _tail (as when eagerly advancing _tail) can add its
             // weight to the write without overflowing the counter
-
 
         }
                 
@@ -374,47 +439,41 @@ struct dual {
             }
         }
     }
-    
-    
-    
-    ~dual() {
-        // no calls to push, pop etc. are active but it is possible that the
-        // nodes are still retained elswehere so we must destroy them properly
-        
-        // nodes that are retained aren't permitted to mutate _next (including
-        // reusing the nodes in another container) unless they have established
-        // unique ownership, i.e.
-        //     ptr(a)->_count.load(memory_order_acquire) == cnt(a)
-        
-        // advance tail
-        u64 a, b;
+
+    [[noreturn]] void pop_and_call_forever_with_dispatch() const {
+        std::unique_ptr<detail::node<void()>> promise{new detail::node<void()>};
         for (;;) {
-            a = _tail;
-            b = mptr(a)->_next;
-            if (!(b & ~TAG) || (b & TAG))
-                break;
-            _tail = b;
-            ptr(a)->release(cnt(a));
-            ptr(b)->release(1); // <-- coalesce this somehow?
+            while (!_continuations.empty()) {
+                while (_continuations.size() > 1) {
+                    push(std::move(_continuations.front()));
+                    _continuations.pop_front();
+                }
+                assert(_continuations.size() == 1);
+                if (u64 f = try_pop()) {
+                    push(std::move(_continuations.front()));
+                    _continuations.pop_front();
+                    mptr(f)->mut_call_and_erase_and_release(cnt(f));
+                } else {
+                    fn<void()> g = std::move(_continuations.front());
+                    _continuations.pop_front();
+                    g();
+                }
+            }
+            assert(_continuations.empty());
+            u64 f = _pop_item_or_push_promise((u64) promise.get());
+            if (f) {
+                mptr(f)->mut_call_and_erase_and_release(cnt(f));
+            } else {
+                detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
+                promise.reset(new detail::node<void()>);
+                ptr->_promise.wait(0, std::memory_order_relaxed);
+                u64 g = ptr->_promise.load(std::memory_order_acquire);
+                ptr->release(1);
+                mptr(g)->mut_call_and_erase_and_delete();
+            }
         }
-        // advance head
-        for (;;) {
-            a = _head;
-            b = mptr(a)->_next;
-            if (!(b & ~TAG) || (b & TAG))
-                break;
-            _head = b;
-            ptr(a)->release(cnt(a));
-            ptr(b)->release(1);
-        }
-        while ((a = mptr(_tail)->_next)) {
-            mptr(_tail)->_next = mptr(mptr(_tail)->_next)->_next;
-            ptr(a)->release(cnt(a));
-        }
-        assert(ptr(_head) == ptr(_tail));
-        ptr(_head)->release(cnt(_head) + cnt(_tail));
     }
-    
+
 };
 
 
@@ -493,43 +552,60 @@ TEST_CASE("dual-multi", "[dual]") {
 
 TEST_CASE("dual-exhaust", "[dual]") {
     {
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
-    
-    dual d;
-    auto n = std::thread::hardware_concurrency();
-    std::vector<std::thread> t;
-    const atomic<u64> a{0};
-    
-    // make some workers
-    for (decltype(n) i = 0; i != n; ++i) {
-        t.emplace_back([&] {
-            try {
-                d.pop_and_call_forever();
-            } catch (...) {
-                // interpret exceptions as quit signal
+        printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+        
+        dual d;
+        auto n = std::thread::hardware_concurrency();
+        std::vector<std::thread> t;
+        const atomic<u64> a{0};
+        
+        // make some workers
+        for (decltype(n) i = 0; i != n; ++i) {
+            t.emplace_back([&] {
+                try {
+                    d.pop_and_call_forever_with_dispatch();
+                } catch (...) {
+                    // interpret exceptions as quit signal
+                }
+            });
+        }
+        
+        
+        std::atomic<u64> z{0};
+        std::atomic<u64> y{0};
+        
+        y.fetch_add(1, std::memory_order_relaxed);
+        d.push([&d, n, &z, &y] {
+            for (decltype(n) i = 0; i != 8; ++i) {
+                int gen = 0x0'FF;
+                Y([&d, n, gen, &z, &y](auto& self) mutable -> void {
+                    z.fetch_add(1, std::memory_order_relaxed);
+                    if (gen) {
+                        gen >>= 1;
+                        y.fetch_add(1, std::memory_order_relaxed);
+                        dual::_continuations.emplace_back(self);
+                        y.fetch_add(1, std::memory_order_relaxed);
+                        dual::_continuations.emplace_back(self);
+                    } else {
+                        // submit kill jobs
+                        for (decltype(n) i = 0; i != n; ++i) {
+                            y.fetch_add(1, std::memory_order_relaxed);
+                            d.push([&z, &y] {
+                                z.fetch_add(1, std::memory_order_relaxed);
+                                ; throw 0; });
+                        }
+                    }
+                })();
             }
         });
-    }
-            
-    for (decltype(n) i = 0; i != 8; ++i) {
-        int gen = 0xFFFFF;
-        Y([&d, n, gen](auto& self) mutable -> void {
-            //std::cout << std::this_thread::get_id() << '\n';
-            if (gen--)
-                d.push(std::move(self));
-            else
-                // submit kill jobs
-                for (decltype(n) i = 0; i != n; ++i) {
-                    d.push([] { throw 0; });
-                }
-        })();
-    }
-    
-    // join threads
-    while (!t.empty()) {
-        t.back().join();
-        t.pop_back();
-    }
+        
+        // join threads
+        while (!t.empty()) {
+            t.back().join();
+            t.pop_back();
+        }
+        printf("submitted %llu jobs\n", y.load(std::memory_order_relaxed));
+        printf("executed  %llu jobs\n", z.load(std::memory_order_relaxed));
     }
     printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
     

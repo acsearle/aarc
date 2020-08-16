@@ -12,28 +12,23 @@
 #include <utility>
 
 template<typename T>
-struct maybe {
+union maybe {
     
-    alignas(T) unsigned char _value[sizeof(T)];
+    T value;
     
+    maybe() {}
+    maybe(maybe const&) = default;
+    ~maybe() {}
+        
     template<typename... Args>
     void emplace(Args&&... args) {
-        new ((void*) _value) T(std::forward<Args>(args)...);
+        new (&value) T(std::forward<Args>(args)...);
     }
     
     void erase() const noexcept {
-        (*this)->~T();
+        (&value)->~T();
     }
     
-    T& get() { return reinterpret_cast<T&>(*_value); }
-    T const& get() const { return reinterpret_cast<T const&>(*_value); }
-    
-    T* operator->() { return reinterpret_cast<T*>(_value); }
-    T const* operator->() const { return reinterpret_cast<T const*>(_value); }
-    
-    T& operator*() { return reinterpret_cast<T&>(*_value); }
-    T const& operator*() const { return reinterpret_cast<T const&>(*_value); }
-
 };
 
 #endif /* maybe_hpp */

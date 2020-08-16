@@ -285,7 +285,7 @@ struct stack {
             if (_head.compare_exchange_weak(a, b, std::memory_order_acquire, std::memory_order_relaxed)) {
                 node* ptr = (node*) (b & LO);
                 do if (_head.compare_exchange_weak(b, ptr->_next, std::memory_order_relaxed, std::memory_order_relaxed)) {
-                    x = std::move(*ptr->_payload);
+                    x = std::move(ptr->_payload.value);
                     ptr->_payload.erase();
                     _release(ptr, (b >> 48) + 2);
                     return true;
