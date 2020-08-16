@@ -18,7 +18,6 @@
 		CA94A44924E402A5009B692E /* atomic.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44724E402A5009B692E /* atomic.cpp */; };
 		CA94A44C24E4030A009B692E /* stack.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44A24E4030A009B692E /* stack.cpp */; };
 		CA94A44F24E40824009B692E /* queue.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44D24E40823009B692E /* queue.cpp */; };
-		CA94A45224E40864009B692E /* accountant.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A45024E40864009B692E /* accountant.cpp */; };
 		CA94A45524E50BEA009B692E /* mutex.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A45324E50BEA009B692E /* mutex.cpp */; };
 		CA94A45824E5107F009B692E /* dual.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A45624E5107F009B692E /* dual.cpp */; };
 		CA94A45B24E6D0B7009B692E /* y.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A45924E6D0B7009B692E /* y.cpp */; };
@@ -62,8 +61,6 @@
 		CA94A44B24E4030A009B692E /* stack.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = stack.hpp; sourceTree = "<group>"; };
 		CA94A44D24E40823009B692E /* queue.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = queue.cpp; sourceTree = "<group>"; };
 		CA94A44E24E40824009B692E /* queue.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = queue.hpp; sourceTree = "<group>"; };
-		CA94A45024E40864009B692E /* accountant.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = accountant.cpp; sourceTree = "<group>"; };
-		CA94A45124E40864009B692E /* accountant.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = accountant.hpp; sourceTree = "<group>"; };
 		CA94A45324E50BEA009B692E /* mutex.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = mutex.cpp; sourceTree = "<group>"; };
 		CA94A45424E50BEA009B692E /* mutex.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = mutex.hpp; sourceTree = "<group>"; };
 		CA94A45624E5107F009B692E /* dual.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = dual.cpp; sourceTree = "<group>"; };
@@ -108,8 +105,6 @@
 			children = (
 				CA47C20524B7091D00B9C828 /* aarc.cpp */,
 				CA47C20624B7091D00B9C828 /* aarc.hpp */,
-				CA94A45024E40864009B692E /* accountant.cpp */,
-				CA94A45124E40864009B692E /* accountant.hpp */,
 				CA94A43924DF802D009B692E /* atomic_wait.cpp */,
 				CA94A43824DF802D009B692E /* atomic_wait.hpp */,
 				CA94A44724E402A5009B692E /* atomic.cpp */,
@@ -117,6 +112,8 @@
 				CA47C20424B708D300B9C828 /* catch.hpp */,
 				CA94A43224DE259E009B692E /* corrode.cpp */,
 				CA94A43324DE259E009B692E /* corrode.hpp */,
+				CA94A45F24E86E06009B692E /* counted.cpp */,
+				CA94A46024E86E06009B692E /* counted.hpp */,
 				CA94A45624E5107F009B692E /* dual.cpp */,
 				CA94A45724E5107F009B692E /* dual.hpp */,
 				CA94A44124E2F3AA009B692E /* fn.cpp */,
@@ -126,6 +123,8 @@
 				CA94A44524E2F3E5009B692E /* maybe.hpp */,
 				CA94A45324E50BEA009B692E /* mutex.cpp */,
 				CA94A45424E50BEA009B692E /* mutex.hpp */,
+				CA94A45C24E7E1F0009B692E /* node.cpp */,
+				CA94A45D24E7E1F0009B692E /* node.hpp */,
 				CA94A43E24E15643009B692E /* pool.cpp */,
 				CA94A43F24E15643009B692E /* pool.hpp */,
 				CA94A44D24E40823009B692E /* queue.cpp */,
@@ -136,10 +135,6 @@
 				CA94A44B24E4030A009B692E /* stack.hpp */,
 				CA94A45924E6D0B7009B692E /* y.cpp */,
 				CA94A45A24E6D0B7009B692E /* y.hpp */,
-				CA94A45C24E7E1F0009B692E /* node.cpp */,
-				CA94A45D24E7E1F0009B692E /* node.hpp */,
-				CA94A45F24E86E06009B692E /* counted.cpp */,
-				CA94A46024E86E06009B692E /* counted.hpp */,
 			);
 			path = aarc;
 			sourceTree = "<group>";
@@ -203,7 +198,6 @@
 			files = (
 				CA94A44624E2F3E5009B692E /* maybe.cpp in Sources */,
 				CA94A43424DE259E009B692E /* corrode.cpp in Sources */,
-				CA94A45224E40864009B692E /* accountant.cpp in Sources */,
 				CA94A44324E2F3AA009B692E /* fn.cpp in Sources */,
 				CA94A44C24E4030A009B692E /* stack.cpp in Sources */,
 				CA94A43D24E15635009B692E /* reactor.cpp in Sources */,

@@ -16,7 +16,6 @@
 #include <iostream>
 #include <cinttypes>
 
-#include "accountant.hpp"
 #include "maybe.hpp"
 
 template<typename T>
