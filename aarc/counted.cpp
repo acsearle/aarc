@@ -59,7 +59,7 @@ bool ispow2(Integral n) {
 template<typename T>
 bool healthy(counted<T const*> p) {
     using U = counted<T const*>;
-    return p.raw & (p.raw + U::INC) & U::CNT;
+    return (u64) p & ((u64) p + U::INC) & U::CNT;
 }
 
 
@@ -71,6 +71,17 @@ bool healthy(counted<T const*> p) {
 // you must call release with the returned value NOT the value of expected.cnt
 // the returned value is not always the change in expected.cnt (replenish path)
 
+template<typename T>
+[[nodiscard]] u64 atomic_acquire(atomic<counted<T const*>> const& p,
+                                 counted<T const*>& expected,
+                                 std::memory_order failure = std::memory_order_relaxed) {
+    do if (auto n = atomic_compare_acquire_weak(p,
+                                                expected,
+                                                std::memory_order_relaxed)) {
+        return n;
+    } while (expected.ptr);
+    return 0;
+}
     
 template<typename T>
 [[nodiscard]] u64 atomic_compare_acquire_weak(atomic<counted<T const*>> const& p,
@@ -124,6 +135,12 @@ template<typename T>
     using C = counted<T const*>;
     constexpr auto MAX = counted<T const*>::MAX;
     C desired = expected;
+    printf("%llx\n%llx\n", (u64) expected, (u64) desired);
+    printf("expected.ptr %p\n", (T const*) expected.ptr);
+    printf("desired.ptr %p\n", (T const*) desired.ptr);
+    printf("    === %d\n", expected.ptr == desired.ptr);
+    printf("    === %llx\n", (u64) expected - (u64) desired);
+
     while (expected.ptr && (expected.ptr == desired.ptr)) {
         if (__builtin_expect(expected.cnt > 1, true)) {
             desired = expected - 1;
@@ -156,6 +173,7 @@ template<typename T>
             p.wait(expected, failure);
             expected = p.load(failure);
         }
+        printf("%llx\n%llx\n", (u64) expected, (u64) desired);
     };
     return 0;
 }
@@ -163,7 +181,7 @@ template<typename T>
 
 
 TEST_CASE("counted") {
-    
+        
     u64 x;
     
     counted<u64*> p;
@@ -171,7 +189,7 @@ TEST_CASE("counted") {
     p.ptr = &x;
     p.tag = 3;
     
-    REQUIRE((p.raw) == (((u64) 6 << 47) | 3 | (u64) &x));
+    REQUIRE(((u64) p) == (((u64) 6 << 47) | 3 | (u64) &x));
     
     REQUIRE(p.cnt == 7);
     REQUIRE(p.ptr == &x);
@@ -199,16 +217,20 @@ TEST_CASE("counted") {
     REQUIRE(z == 101);
     
     printf("0x%0.16llx\n", (u64) &x);
-    printf("0x%0.16llx\n", p.raw);
+    printf("0x%0.16llx\n", (u64) p);
     printf("%s\n", fmtb(&x));
-    printf("%s\n", fmtb(p.raw));
+    printf("%s\n", fmtb((u64) p));
     printf("%s\n", fmtb(754));
     
     REQUIRE_FALSE(healthy(counted<u64 const*>{nullptr}));
     
     const atomic<counted<counter const*>> q(counted<counter const*>{10, new counter{10}, 0});
-    
+
     auto w = q.load(std::memory_order_relaxed);
+    printf("q = %s\n", fmtb((u64) w));
+
+    printf("w %llx\n", (u64) w);
+    
     auto n = atomic_compare_acquire_strong(q, w);
     REQUIRE(n == 1); // <-- acquire normally
     n = atomic_compare_acquire_strong(q, w);

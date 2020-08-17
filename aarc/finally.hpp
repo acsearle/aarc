@@ -1,0 +1,66 @@
+//
+//  finally.hpp
+//  aarc
+//
+//  Created by Antony Searle on 17/8/20.
+//  Copyright © 2020 Antony Searle. All rights reserved.
+//
+
+#ifndef finally_hpp
+#define finally_hpp
+
+#include <type_traits>
+#include <utility>
+
+template<typename Callable>
+class final_action {
+    
+    Callable _callable;
+    bool _flag;
+    
+public:
+    
+    final_action()
+    : _callable()
+    , _flag(false) {
+    }
+    
+    final_action(Callable const& callable)
+    : _callable(callable)
+    , _flag(true) {
+    }
+    
+    final_action(Callable&& callable)
+    : _callable(std::move(callable))
+    , _flag(true) {
+    }
+    
+    final_action(final_action const&) = delete;
+    
+    final_action(final_action&& other)
+    : _callable(std::move(other._callable))
+    , _flag(std::exchange(other._flag, false)) {
+    }
+    
+    ~final_action() {
+        if (_flag)
+            _callable();
+    }
+    
+    final_action& operator=(final_action const&) = delete;
+    
+    final_action& operator=(final_action&& other) {
+        _callable = std::move(other._callable); // <-- likely to hit lambda irregularity
+        _flag = std::exchange(other._callable, false);
+    }
+    
+};
+
+template<typename Callable>
+[[nodiscard]] final_action<std::decay_t<Callable>> finally(Callable&& callable) {
+    return final_action<std::decay_t<Callable>>(std::forward<Callable>(callable));
+}
+
+
+
+#endif /* finally_hpp */

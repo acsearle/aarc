@@ -459,17 +459,17 @@ struct dual {
                     g();
                 }
             }
-            assert(_continuations.empty());
+            assert(_continuations.empty() && promise);
             u64 f = _pop_item_or_push_promise((u64) promise.get());
             if (f) {
                 mptr(f)->mut_call_and_erase_and_release(cnt(f));
             } else {
                 detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
-                promise.reset(new detail::node<void()>);
                 ptr->_promise.wait(0, std::memory_order_relaxed);
                 u64 g = ptr->_promise.load(std::memory_order_acquire);
                 ptr->release(1);
                 mptr(g)->mut_call_and_erase_and_delete();
+                promise.reset(new detail::node<void()>);
             }
         }
     }
@@ -516,7 +516,7 @@ TEST_CASE("dual-multi", "[dual]") {
             try {
                 d.pop_and_call_forever();
             } catch (...) {
-                // interpret exceptions as quit signal
+                // interpret any exceptions as end worker
             }
         });
     }

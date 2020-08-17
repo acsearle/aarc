@@ -14,6 +14,7 @@
 
 #include "atomic.hpp"
 #include "maybe.hpp"
+#include "finally.hpp"
 
 // fn is a polymorphic function wrapper like std::function
 //
@@ -118,29 +119,16 @@ struct wrapper<R(Args...), T> final : node<R(Args...)> {
     virtual ~wrapper() noexcept override final = default;
     
     virtual R mut_call(Args... args) override final {
-        if constexpr (std::is_same_v<R, void>) {
-            _payload.value(std::forward<Args>(args)...);
-        } else {
-            return _payload.value(std::forward<Args>(args)...);
-        }
+        return _payload.value(std::forward<Args>(args)...);
     }
     
     virtual void erase() const noexcept override final {
         _payload.erase();
     }
     
-    virtual R mut_call_and_erase(Args... args) override final try {
-        if constexpr (std::is_same_v<R, void>) {
-            mut_call(std::forward<Args>(args)...);
-            erase(); // <-- nonvirtual because final
-        } else {
-            R r{mut_call(std::forward<Args>(args)...)};
-            erase();
-            return r; // <-- "this" is now invalid but r is a stack variable
-        }
-    } catch(...) {
-        erase();
-        throw;
+    virtual R mut_call_and_erase(Args... args) override final {
+        auto guard = finally([=]{ erase(); });
+        return mut_call(std::forward<Args>(args)...);
     }
     
     virtual void erase_and_delete() const noexcept override final {
@@ -153,34 +141,14 @@ struct wrapper<R(Args...), T> final : node<R(Args...)> {
         this->release(n); // <-- encourage inlined destructor as part of same call
     };
 
-    virtual R mut_call_and_erase_and_delete(Args... args) override final try {
-        if constexpr (std::is_same_v<R, void>) {
-            mut_call(std::forward<Args>(args)...);;
-            erase_and_delete(); // <-- nonvirtual because final
-            return;
-        } else {
-            R r{mut_call(std::forward<Args>(args)...)};
-            erase_and_delete();
-            return r; // <-- "this" is now invalid but r is a stack variable
-        }
-    } catch(...) {
-        erase_and_delete();
-        throw;
+    virtual R mut_call_and_erase_and_delete(Args... args) override final {
+        auto guard = finally([=]{ erase_and_delete(); });
+        return mut_call(std::forward<Args>(args)...);
     }
 
-    virtual R mut_call_and_erase_and_release(u64 n, Args... args) override final try {
-        if constexpr (std::is_same_v<R, void>) {
-            mut_call(std::forward<Args>(args)...);
-            erase_and_release(n); // <-- nonvirtual because final
-            return;
-        } else {
-            R r{mut_call(std::forward<Args>(args)...)};
-            erase_and_release(n);
-            return r; // <-- "this" is now invalid but r is a stack variable
-        }
-    } catch(...) {
-        erase_and_release(n);
-        throw;
+    virtual R mut_call_and_erase_and_release(u64 n, Args... args) override final {
+        auto guard = finally([=]{ erase_and_release(n); });
+        return mut_call(std::forward<Args>(args)...);
     }
 
     virtual u64 try_clone() const override final {
