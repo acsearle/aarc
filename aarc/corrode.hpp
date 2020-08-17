@@ -46,6 +46,7 @@ inline constexpr struct  {
 //  continuation elsewhere
 //
 //      void foo() {
+//          printf("about to suspend...\n");
 //          ssize_t n = co_await async_read(fd, buf, n);
 //          printf("read %td\n", n);
 //      }
@@ -66,6 +67,38 @@ template<typename... Args>
 struct coroutine_traits<void, Args...> { using promise_type = promise_nothing; };
 
 }
+
+template<typename Rep, typename Period>
+struct await_duration {
+    std::chrono::duration<Rep, Period> _t;
+    explicit await_duration(std::chrono::duration<Rep, Period> t) : _t(t) {}
+    bool await_ready() { return false; }
+    template<typename T>
+    void await_suspend(std::experimental::coroutine_handle<T> h) {
+        reactor::get().after(std::move(_t), h);
+    }
+    void await_resume() {}
+};
+
+template<typename Rep, typename Period>
+await_duration<Rep, Period> operator co_await(std::chrono::duration<Rep, Period> t) {
+    return await_duration<Rep, Period>(std::move(t));
+}
+
+template<typename Clock, typename Duration>
+struct await_time_point {
+    std::chrono::time_point<Clock, Duration> _t;
+    explicit await_time_point(std::chrono::time_point<Clock, Duration> t) : _t(std::move(t)) {}
+    bool await_ready() { return false; }
+    template<typename T>
+    void await_suspend(std::experimental::coroutine_handle<T> h) {
+        reactor::get().when(std::move(_t), h);
+    }
+    void await_resume() {}
+};
+
+
+
 
 struct async_read {
     

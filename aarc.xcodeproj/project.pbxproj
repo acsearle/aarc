@@ -8,14 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		CA47C1FE24B7086100B9C828 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA47C1FD24B7086100B9C828 /* main.cpp */; };
-		CA47C20724B7091D00B9C828 /* aarc.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA47C20524B7091D00B9C828 /* aarc.cpp */; };
 		CA94A43424DE259E009B692E /* corrode.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A43224DE259E009B692E /* corrode.cpp */; };
 		CA94A43A24DF802D009B692E /* atomic_wait.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A43924DF802D009B692E /* atomic_wait.cpp */; };
 		CA94A43D24E15635009B692E /* reactor.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A43B24E15635009B692E /* reactor.cpp */; };
 		CA94A44024E15643009B692E /* pool.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A43E24E15643009B692E /* pool.cpp */; };
 		CA94A44324E2F3AA009B692E /* fn.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44124E2F3AA009B692E /* fn.cpp */; };
 		CA94A44624E2F3E5009B692E /* maybe.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44424E2F3E5009B692E /* maybe.cpp */; };
-		CA94A44924E402A5009B692E /* atomic.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44724E402A5009B692E /* atomic.cpp */; };
 		CA94A44C24E4030A009B692E /* stack.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44A24E4030A009B692E /* stack.cpp */; };
 		CA94A44F24E40824009B692E /* queue.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A44D24E40823009B692E /* queue.cpp */; };
 		CA94A45524E50BEA009B692E /* mutex.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A45324E50BEA009B692E /* mutex.cpp */; };
@@ -26,6 +24,7 @@
 		CA94A46424EA36EF009B692E /* journal.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A46224EA36EF009B692E /* journal.cpp */; };
 		CA94A46724EA4FF6009B692E /* finally.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A46524EA4FF6009B692E /* finally.cpp */; };
 		CA94A46A24EA5E57009B692E /* drop.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A46824EA5E57009B692E /* drop.cpp */; };
+		CA94A46D24EA6BA5009B692E /* epoch.cpp in Sources */ = {isa = PBXBuildFile; fileRef = CA94A46B24EA6BA5009B692E /* epoch.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -44,8 +43,6 @@
 		CA47C1FA24B7086100B9C828 /* aarc */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = aarc; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA47C1FD24B7086100B9C828 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 		CA47C20424B708D300B9C828 /* catch.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = catch.hpp; sourceTree = "<group>"; };
-		CA47C20524B7091D00B9C828 /* aarc.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = aarc.cpp; sourceTree = "<group>"; };
-		CA47C20624B7091D00B9C828 /* aarc.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = aarc.hpp; sourceTree = "<group>"; };
 		CA94A43224DE259E009B692E /* corrode.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = corrode.cpp; sourceTree = "<group>"; };
 		CA94A43324DE259E009B692E /* corrode.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = corrode.hpp; sourceTree = "<group>"; };
 		CA94A43824DF802D009B692E /* atomic_wait.hpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.h; path = atomic_wait.hpp; sourceTree = "<group>"; };
@@ -58,7 +55,6 @@
 		CA94A44224E2F3AA009B692E /* fn.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = fn.hpp; sourceTree = "<group>"; };
 		CA94A44424E2F3E5009B692E /* maybe.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = maybe.cpp; sourceTree = "<group>"; };
 		CA94A44524E2F3E5009B692E /* maybe.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = maybe.hpp; sourceTree = "<group>"; };
-		CA94A44724E402A5009B692E /* atomic.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = atomic.cpp; sourceTree = "<group>"; };
 		CA94A44824E402A5009B692E /* atomic.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = atomic.hpp; sourceTree = "<group>"; };
 		CA94A44A24E4030A009B692E /* stack.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = stack.cpp; sourceTree = "<group>"; };
 		CA94A44B24E4030A009B692E /* stack.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = stack.hpp; sourceTree = "<group>"; };
@@ -80,6 +76,8 @@
 		CA94A46624EA4FF6009B692E /* finally.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = finally.hpp; sourceTree = "<group>"; };
 		CA94A46824EA5E57009B692E /* drop.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = drop.cpp; sourceTree = "<group>"; };
 		CA94A46924EA5E57009B692E /* drop.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = drop.hpp; sourceTree = "<group>"; };
+		CA94A46B24EA6BA5009B692E /* epoch.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = epoch.cpp; sourceTree = "<group>"; };
+		CA94A46C24EA6BA5009B692E /* epoch.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = epoch.hpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -112,11 +110,8 @@
 		CA47C1FC24B7086100B9C828 /* aarc */ = {
 			isa = PBXGroup;
 			children = (
-				CA47C20524B7091D00B9C828 /* aarc.cpp */,
-				CA47C20624B7091D00B9C828 /* aarc.hpp */,
 				CA94A43924DF802D009B692E /* atomic_wait.cpp */,
 				CA94A43824DF802D009B692E /* atomic_wait.hpp */,
-				CA94A44724E402A5009B692E /* atomic.cpp */,
 				CA94A44824E402A5009B692E /* atomic.hpp */,
 				CA47C20424B708D300B9C828 /* catch.hpp */,
 				CA94A43224DE259E009B692E /* corrode.cpp */,
@@ -127,6 +122,8 @@
 				CA94A46924EA5E57009B692E /* drop.hpp */,
 				CA94A45624E5107F009B692E /* dual.cpp */,
 				CA94A45724E5107F009B692E /* dual.hpp */,
+				CA94A46B24EA6BA5009B692E /* epoch.cpp */,
+				CA94A46C24EA6BA5009B692E /* epoch.hpp */,
 				CA94A46524EA4FF6009B692E /* finally.cpp */,
 				CA94A46624EA4FF6009B692E /* finally.hpp */,
 				CA94A44124E2F3AA009B692E /* fn.cpp */,
@@ -219,9 +216,8 @@
 				CA94A44024E15643009B692E /* pool.cpp in Sources */,
 				CA94A46124E86E06009B692E /* counted.cpp in Sources */,
 				CA94A45824E5107F009B692E /* dual.cpp in Sources */,
-				CA94A44924E402A5009B692E /* atomic.cpp in Sources */,
+				CA94A46D24EA6BA5009B692E /* epoch.cpp in Sources */,
 				CA94A46724EA4FF6009B692E /* finally.cpp in Sources */,
-				CA47C20724B7091D00B9C828 /* aarc.cpp in Sources */,
 				CA94A43A24DF802D009B692E /* atomic_wait.cpp in Sources */,
 				CA47C1FE24B7086100B9C828 /* main.cpp in Sources */,
 				CA94A46A24EA5E57009B692E /* drop.cpp in Sources */,

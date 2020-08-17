@@ -10,12 +10,13 @@
 #define journal_hpp
 
 #include <deque>
-#include <mutex>
 #include <thread>
 #include <list>
 #include <vector>
 #include <map>
 #include <algorithm>
+
+#include "mutex.hpp"
 
 class journal {
     
@@ -24,9 +25,9 @@ protected:
     journal() = default;
     virtual void _commit_t() = 0;
         
-    static decltype(auto) _get_master() {
-        thread_local static std::vector<journal*> _master;
-        return _master;
+    static std::vector<journal*>& _get_registry() {
+        thread_local static std::vector<journal*> _registry;
+        return _registry;
     }
     
 public:
@@ -42,8 +43,10 @@ public:
         
 };
 
+namespace detail {
+
 template<typename... Args>
-class _journal_t final : journal {
+class journal_of final : journal {
     
     friend class journal;
     
@@ -51,26 +54,24 @@ class _journal_t final : journal {
     using D = std::deque<T>;
     D _deque;
     
-    static _journal_t& _get_local() {
-        thread_local static _journal_t j;
-        return j;
+    static journal_of& _get_local() {
+        thread_local static journal_of _local;
+        return _local;
     }
     
     using L = std::list<std::pair<std::thread::id, D>>;
-    using P = std::pair<std::mutex, L>;
+    using M = mutex<L>;
     
-    static P& _get_global() {
-        static P g;
+    static M const& _get_global() {
+        static M g;
         return g;
     }
-    
-public:
 
-    _journal_t() {
-        _get_master().push_back(this);
+    journal_of() {
+        _get_registry().push_back(this);
     }
     
-    ~_journal_t() {
+    ~journal_of() {
         _commit_t();
     }
     
@@ -81,25 +82,26 @@ public:
     virtual void _commit_t() override final {
         L x;
         x.emplace_back(std::this_thread::get_id(), std::move(_get_local()._deque));
-        P& y = _get_global();
-        auto lock = std::unique_lock{y.first};
-        y.second.splice(y.second.end(), std::move(x));
+        auto y = _get_global().lock();
+        y->splice(y->end(), std::move(x));
     }
         
 };
 
+} // class journal_of
+
 template<typename... Args>
 void journal::enter(Args&&... args) {
     static_assert(sizeof...(Args));
-    _journal_t<std::decay_t<Args>...>::enter(std::forward<Args>(args)...);
+    detail::journal_of<std::decay_t<Args>...>::enter(std::forward<Args>(args)...);
 }
 
 template<typename... Args>
 void journal::commit() {
     if constexpr (sizeof...(Args)) {
-        _journal_t<std::decay_t<Args>...>::commit();
+        detail::journal_of<std::decay_t<Args>...>::commit(); // <-- commit specific
     } else {
-        for (auto p : _get_master()) {
+        for (auto p : _get_registry()) { // <-- commit all
             assert(p);
             p->_commit_t();
         }
@@ -108,24 +110,12 @@ void journal::commit() {
 
 template<typename... Args>
 auto journal::take() {
-    _journal_t<std::decay_t<Args>...>::_get_local()._commit_t();
-    auto& x = _journal_t<std::decay_t<Args>...>::_get_global();
-    auto lock = std::unique_lock{x.first};
-    return std::move(x.second);
+    detail::journal_of<std::decay_t<Args>...>::_get_local()._commit_t();
+    return std::move(*detail::journal_of<std::decay_t<Args>...>::_get_global().lock());
 }
 
 template<typename... Args>
 void flatten(std::list<std::pair<std::thread::id, std::deque<std::tuple<Args...>>>> x) {
-    /*
-    std::map<std::thread::id, std::vector<std::tuple<Args...>>> y;
-    while (!x.empty()) {
-        auto& z = y[x.front().first];
-        z.reserve(z.size() + x.front().second.size());
-        std::move(x.front().second.begin(),
-                  x.front().second().end(),
-                  std::back_inserter(z));
-    }
-     */
     std::size_t n = 0;
     for (auto const& a : x)
         n += a.second.size();
@@ -137,6 +127,14 @@ void flatten(std::list<std::pair<std::thread::id, std::deque<std::tuple<Args...>
             y.push_back(std::tuple_cat(id, std::move(b)));
         }
     }
+}
+
+template<typename... Args>
+std::map<std::tuple<Args...>, std::size_t> histogram(std::vector<std::tuple<Args...>> x) {    
+    std::map<std::tuple<Args...>, std::size_t> y;
+    for (auto& a : x)
+        ++(y[std::move(a)]);
+    return y;
 }
 
 

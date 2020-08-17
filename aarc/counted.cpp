@@ -75,11 +75,9 @@ template<typename T>
 [[nodiscard]] u64 atomic_acquire(atomic<counted<T const*>> const& p,
                                  counted<T const*>& expected,
                                  std::memory_order failure = std::memory_order_relaxed) {
-    do if (auto n = atomic_compare_acquire_weak(p,
-                                                expected,
-                                                std::memory_order_relaxed)) {
-        return n;
-    } while (expected.ptr);
+    do if (auto n = atomic_compare_acquire_weak(p, expected, failure))
+            return n;
+    while (expected.ptr);
     return 0;
 }
     
@@ -89,10 +87,9 @@ template<typename T>
                                               std::memory_order failure = std::memory_order_relaxed) {
     using C = counted<T const*>;
     constexpr auto MAX = counted<T const*>::MAX;
-    C desired = expected;
     if (expected.ptr) {
         if (__builtin_expect(expected.cnt > 1, true)) {
-            desired = expected - 1;
+            C desired = expected - 1;
             if (p.compare_exchange_weak(expected,
                                         desired,
                                         std::memory_order_acquire,
@@ -133,14 +130,11 @@ template<typename T>
                                                counted<T const*>& expected,
                                                std::memory_order failure = std::memory_order_relaxed) {
     using C = counted<T const*>;
-    constexpr auto MAX = counted<T const*>::MAX;
     C desired = expected;
-    printf("%llx\n%llx\n", (u64) expected, (u64) desired);
-    printf("expected.ptr %p\n", (T const*) expected.ptr);
-    printf("desired.ptr %p\n", (T const*) desired.ptr);
-    printf("    === %d\n", expected.ptr == desired.ptr);
-    printf("    === %llx\n", (u64) expected - (u64) desired);
-
+    if (!expected.ptr) {
+        expected = p.load(failure);
+        return 0;
+    }
     while (expected.ptr && (expected.ptr == desired.ptr)) {
         if (__builtin_expect(expected.cnt > 1, true)) {
             desired = expected - 1;
@@ -153,9 +147,9 @@ template<typename T>
                     return 1; // <-- fast path completes
                 } else { // <-- count is a power of two, perform housekeeping
                     expected = desired;
-                    expected->acquire(MAX - 1); // <-- get more weight from global count
+                    expected->acquire(C::MAX - 1); // <-- get more weight from global count
                     do if (p.compare_exchange_weak(expected,
-                                                   desired = expected + (MAX - expected.cnt),
+                                                   desired = expected + (C::MAX - expected.cnt),
                                                    std::memory_order_release,
                                                    failure)) {
                         if (__builtin_expect(expected.cnt == 1, false)) // <-- we fixed an exhausted counter
@@ -164,8 +158,7 @@ template<typename T>
                         swap(expected, desired);
                         return desired.cnt;
                     } while (expected.ptr == desired.ptr); // <-- while the pointer bits are unchanged
-                    // we successfully acquired the pointer but it changed while we were repairing its counter
-                    desired->release(MAX);
+                    desired->release(C::MAX); // <-- the pointer changed under us
                     return 0;
                 }
             }
@@ -173,7 +166,6 @@ template<typename T>
             p.wait(expected, failure);
             expected = p.load(failure);
         }
-        printf("%llx\n%llx\n", (u64) expected, (u64) desired);
     };
     return 0;
 }

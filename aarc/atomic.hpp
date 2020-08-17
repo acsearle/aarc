@@ -26,6 +26,10 @@ template<> struct _uint_t<16> { using type = std::uint16_t; };
 template<> struct _uint_t<32> { using type = std::uint32_t; };
 template<> struct _uint_t<64> { using type = std::uint64_t; };
 
+// rust-style atomic that uses constness as a guide to switch between atomic
+// and non-atomic operations.  mutable overloads of atomic const member
+// functions are deleted to enforce correct usage
+
 template<typename T>
 class atomic {
     

@@ -52,6 +52,18 @@ public:
                 _ptr->_mutex.unlock();
         }
         
+        void swap(guard& other) {
+            using std::swap;
+            swap(_ptr, other._ptr);
+        }
+        
+        guard& operator=(guard const&) = delete;
+
+        guard& operator=(guard&& other) {
+            guard(std::move(other)).swap(*this);
+            return *this;
+        }
+
         explicit operator bool() const {
             return _ptr;
         }
@@ -76,7 +88,7 @@ public:
     
     guard try_lock() = delete;
     guard try_lock() const {
-        return guard(_mutex->try_lock() ? this : nullptr);
+        return guard(_mutex.try_lock() ? this : nullptr);
     }
     
     T* operator->() {
