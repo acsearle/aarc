@@ -9,7 +9,10 @@
 #ifndef mutex_hpp
 #define mutex_hpp
 
+#include <condition_variable>
 #include <mutex>
+
+class condition_variable;
 
 template<typename T, typename M = std::mutex>
 class mutex {
@@ -32,6 +35,7 @@ public:
     class guard {
         
         friend class mutex;
+        friend class condition_variable;
         
         mutex const* _ptr;
         
@@ -68,12 +72,12 @@ public:
             return _ptr;
         }
         
-        T* operator->() const {
+        T* operator->() /* mutable */ {
             assert(_ptr);
             return &_ptr->_payload;
         }
         
-        T& operator*() const {
+        T& operator*() /* mutable */ {
             assert(_ptr);
             return _ptr->_payload;
         }
@@ -111,5 +115,35 @@ public:
 
 template<typename T>
 mutex(T&&) -> mutex<std::decay_t<T>>;
+
+struct condition_variable {
+    
+    std::condition_variable _cv;
+    
+    template<typename T>
+    void wait(typename mutex<T>::guard& guard) {
+        auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
+        auto releaser = finally([&] { lock.release(); });
+        _cv.wait(lock);
+    }
+    
+    template<typename T, typename Predicate>
+    void wait(typename mutex<T>::guard& guard, Predicate&& predicate) {
+        auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
+        auto releaser = finally([&] { lock.release(); });
+        while (!predicate(*guard))
+               _cv.wait(lock);
+    }
+    
+    void notify_one() {
+        _cv.notify_one();
+    }
+    
+    void notify_all() {
+        _cv.notify_all();
+    }
+    
+    
+};
 
 #endif /* mutex_hpp */

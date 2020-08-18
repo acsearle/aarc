@@ -18,6 +18,17 @@
 
 #include "mutex.hpp"
 
+// cheap thread-safe event logging for testing, debugging and analysis
+//
+//     struct foo {
+//         foo() { journal::enter("foo()"); }
+//         ~foo() { journal::enter("~foo()"); }
+//     }
+//         ...
+//     auto x = count(journal::take<char const*>());
+//     REQUIRE(x["foo()"] == x["~foo()"]);
+//
+
 class journal {
     
 protected:
@@ -130,7 +141,7 @@ void flatten(std::list<std::pair<std::thread::id, std::deque<std::tuple<Args...>
 }
 
 template<typename... Args>
-std::map<std::tuple<Args...>, std::size_t> histogram(std::vector<std::tuple<Args...>> x) {    
+std::map<std::tuple<Args...>, std::size_t> count(std::vector<std::tuple<Args...>> x) {
     std::map<std::tuple<Args...>, std::size_t> y;
     for (auto& a : x)
         ++(y[std::move(a)]);

@@ -66,6 +66,11 @@ struct reactor {
         if (write(_pipe[1], &c, 1) != 1)
             (void) perror(strerror(errno)), abort();
         _cancelled_and_notifications.fetch_add(1, std::memory_order_release);
+        
+        // fixme: we can submit one notification when we observe that the
+        // count (flag) is cleared; _cancelled_and_notification becomes two
+        // bits?
+        
     }
     
     void _when_able(int fd, fn<void()> f, stack<fn<void()>> const& target) const {

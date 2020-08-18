@@ -30,29 +30,31 @@ public:
     , _flag(true) {
     }
     
-    final_action(Callable&& callable)
+    final_action(Callable&& callable) noexcept
     : _callable(std::move(callable))
     , _flag(true) {
     }
     
     final_action(final_action const&) = delete;
     
-    final_action(final_action&& other)
+    final_action(final_action&& other) noexcept
     : _callable(std::move(other._callable))
     , _flag(std::exchange(other._flag, false)) {
     }
     
-    ~final_action() {
+    ~final_action() noexcept {
         if (_flag)
             _callable();
     }
     
     final_action& operator=(final_action const&) = delete;
     
-    final_action& operator=(final_action&& other) {
+    final_action& operator=(final_action&& other) noexcept {
         _callable = std::move(other._callable); // <-- likely to hit lambda irregularity
         _flag = std::exchange(other._callable, false);
     }
+    
+    void disarm() { _flag = false; }
     
 };
 

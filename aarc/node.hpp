@@ -12,22 +12,26 @@
 #include <memory>
 #include <new>
 
-#include "atomic.hpp"
+#include "counted.hpp"
+#include "finally.hpp"
 
-// provides reference counting, intrusive linked list
-//
+// provides reference counting, intrusive linked list, type erasure
 
 template<typename T>
-struct node final {
+class alignas(std::max_align_t) node final {
+
+    node() : count(0), next(nullptr) {}
+    
+public:
+    
+    // layout:
+    //     count
+    //     next
+    //     __vtbl
+    //     fields...
     
     atomic<u64> count;
-    atomic<u64> next;
-
-    union {
-        alignas(std::max_align_t) T value;
-    };
-    
-    node() : count(0x0000'0000'0000'0000), next(0) {}
+    atomic<counted<T const*>> next;
     
     node(node const&) = delete;
 
@@ -35,13 +39,23 @@ struct node final {
     
     node& operator=(node const&) = delete;
     
-    template<typename... Args>
-    void emplace(Args&&... args) {
-        new (&value) T(std::forward<Args>(args)...);
+    template<typename U = T, typename... Args>
+    static node* make(Args&&... args) {
+        static_assert(alignof(node) >= alignof(U));
+        static_assert(std::is_base_of_v<T, U>);
+        void* p = operator new (sizeof(node) + sizeof(U));
+        auto a = finally([=] { operator delete(p); });
+        new (p) node;
+        node* q = static_cast<node*>(p);
+        auto b = finally([=] { static_cast<node*>(q)->~node(); });
+        new (q + 1) U(std::forward<Args>(args)...);
+        b.disarm();
+        a.disarm();
+        return q;
     }
-    
+        
     void erase() const {
-        (&value)->~T(); // <-- calls virtual destructor if T has one
+        reinterpret_cast<T const*>(this + 1)->~T();
     }
     
     u64 release(u64 n) const {
@@ -65,52 +79,10 @@ struct node final {
         delete this;
     }
     
-}; // node<T>
-
-/*
-template<typename T>
-struct alignas(std::max_align_t) node {
+    T* operator->() { return reinterpret_cast<T*>(this + 1); }
+    T& operator*() { return reinterpret_cast<T*>(this + 1); }
     
-    atomic<i64> _count;
-    atomic<u64> _next;
-    
-    struct _helper {
-        alignas(node) unsigned char _node[sizeof(node)];
-        alignas(T) unsigned char _T[sizeof(T)];
-    };
-    
-    void* operator new(std::size_t count) {
-        return ::operator new(sizeof(_helper), std::align_val_t{alignof(_helper)});
-    }
-    
-    T* get() { &reinterpret_cast<_helper*>(this)->_T; }
-    T const* get() const { &reinterpret_cast<_helper const*>(this)->_T; }
-
-    template<typename... Args>
-    void emplace(Args&&... args) {
-        new (get()) T(std::forward<Args>(args)...);
-    }
-    
-    void erase() const {
-        get()->~T();
-    }
-    
-    void release(u64 n) const;
-    
-    void erase_and_delete() {
-        erase();
-        delete this;
-    }
-    
-    void erase_and_release(u64 n) const {
-        erase();
-        release(n);
-    }
-    
-};
- 
- */
-
+}; // node
 
 
 #endif /* node_hpp */

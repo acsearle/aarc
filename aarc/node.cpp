@@ -77,10 +77,8 @@ TEST_CASE("abomination") {
     delete a;
      */
     
-    auto* c = new node<C>;
-    
-    c->emplace();
-    auto* b = (node<B>*) c;
+    auto* c = node<B>::make<C>();
+    auto* b = c;
     b->erase();
     
     printf("%lu\n", sizeof(node<C>));

@@ -18,7 +18,7 @@ TEST_CASE("mutex", "[mutex]") {
     auto b = a.lock();
     *b = 8;
     auto c = a.try_lock();
-    REQUIRE_FALSE(c);
+    REQUIRE_FALSE((bool) c);
     drop(b);
     REQUIRE_FALSE(b);
     c = a.try_lock();
