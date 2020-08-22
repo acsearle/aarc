@@ -14,6 +14,7 @@
 #include "dual.hpp"
 #include "fn.hpp"
 #include "y.hpp"
+#include "stack.hpp"
 
 #include "catch.hpp"
 
@@ -477,6 +478,7 @@ struct dual {
 };
 
 
+
 TEST_CASE("dual", "[dual]") {
     printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
 
@@ -615,3 +617,52 @@ TEST_CASE("dual-exhaust", "[dual]") {
 // try_pop
 // defer - to local queue, process last job oneself if try_pop fails (or if we
 // know the queue is empty because pushing next-to-last-job returned a waiter
+
+
+struct pool_dual : dual {
+    
+    std::vector<std::thread> _threads;
+    
+    pool_dual() {
+        auto n = std::thread::hardware_concurrency();
+        std::vector<std::thread> t;
+        for (decltype(n) i = 0; i != n; ++i) {
+            _threads.emplace_back([this] {
+                try {
+                    pop_and_call_forever_with_dispatch();
+                } catch (...) {
+                    // no rethrow
+                }
+            });
+        }
+    }
+    
+    ~pool_dual() {
+        // submit kill jobs
+        for (std::size_t i = 0; i != _threads.size(); ++i)
+            push([] { throw 0; });
+        // join threads as they finish
+        while (!_threads.empty()) {
+            _threads.back().join();
+            _threads.pop_back();
+        }
+    }
+    
+    static pool_dual const& _get() {
+        static pool_dual p;
+        return p;
+    }
+    
+};
+
+void pool_submit_one(fn<void()> f) {
+    pool_dual::_get().push(std::move(f));
+}
+
+void pool_submit_many(stack<fn<void()>> s) {
+    pool_dual const& r = pool_dual::_get();
+    s.reverse();
+    while (!s.empty()) {
+        r.push(s.pop());
+    }
+}

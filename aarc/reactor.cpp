@@ -141,7 +141,7 @@ void reactor::_run() const {
         }
                     
         if (!pending.empty())
-            pool::submit_many(std::move(pending));
+            pool_submit_many(std::move(pending));
 
         count = select(maxfd + 1, &readset, pwriteset, pexceptset, ptimeout);
 

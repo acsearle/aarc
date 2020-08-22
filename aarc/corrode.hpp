@@ -13,6 +13,7 @@
 
 #include "maybe.hpp"
 #include "reactor.hpp"
+#include "pool.hpp"
 
 //  await forever
 //
@@ -34,7 +35,7 @@ inline constexpr struct  {
     bool await_ready() const { return false; }
     template<typename Promise>
     void await_suspend(std::experimental::coroutine_handle<Promise> h) const {
-        pool::submit_one(std::move(h));
+        pool_submit_one(std::move(h));
     }
     void await_resume() const {};
 } transfer;
