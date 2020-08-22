@@ -116,9 +116,11 @@ public:
 template<typename T>
 mutex(T&&) -> mutex<std::decay_t<T>>;
 
-struct condition_variable {
+class condition_variable {
     
     std::condition_variable _cv;
+    
+public:
     
     template<typename T>
     void wait(typename mutex<T>::guard& guard) {
@@ -142,7 +144,6 @@ struct condition_variable {
     void notify_all() {
         _cv.notify_all();
     }
-    
     
 };
 

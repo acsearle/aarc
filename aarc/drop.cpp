@@ -7,3 +7,8 @@
 //
 
 #include "drop.hpp"
+
+#include "catch.hpp"
+
+TEST_CASE("drop", "[drop]") {
+}

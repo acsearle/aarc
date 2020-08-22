@@ -23,24 +23,30 @@
 //     struct foo {
 //         foo() { journal::enter("foo()"); }
 //         ~foo() { journal::enter("~foo()"); }
-//     }
+//     };
 //         ...
-//     auto x = count(journal::take<char const*>());
-//     REQUIRE(x["foo()"] == x["~foo()"]);
+//     auto num = count(journal::take<char const*>());
+//     REQUIRE(num["foo()"] == num["~foo()"]);
 //
 
 class journal {
     
+    // intrusive singly-linked list of journals created on this thread
+    journal* next;
+    
+    static journal*& _get_head() {
+        thread_local static journal* _head = nullptr;
+        return _head;
+    }
+
 protected:
     
-    journal() = default;
-    virtual void _commit_t() = 0;
-        
-    static std::vector<journal*>& _get_registry() {
-        thread_local static std::vector<journal*> _registry;
-        return _registry;
+    journal() {
+        next = std::exchange(_get_head(), this);
     }
     
+    virtual void _commit_t() = 0;
+            
 public:
     
     template<typename... Args>
@@ -77,10 +83,6 @@ class journal_of final : journal {
         static M g;
         return g;
     }
-
-    journal_of() {
-        _get_registry().push_back(this);
-    }
     
     ~journal_of() {
         _commit_t();
@@ -109,14 +111,11 @@ void journal::enter(Args&&... args) {
 
 template<typename... Args>
 void journal::commit() {
-    if constexpr (sizeof...(Args)) {
+    if constexpr (sizeof...(Args))
         detail::journal_of<std::decay_t<Args>...>::commit(); // <-- commit specific
-    } else {
-        for (auto p : _get_registry()) { // <-- commit all
-            assert(p);
+    else
+        for (auto p = _get_head(); p; p = p->next)
             p->_commit_t();
-        }
-    }
 }
 
 template<typename... Args>

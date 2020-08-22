@@ -7,3 +7,8 @@
 //
 
 #include "maybe.hpp"
+
+#include "catch.hpp"
+
+TEST_CASE("maybe", "[maybe]") {
+}

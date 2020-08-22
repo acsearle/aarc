@@ -29,6 +29,14 @@
 //          do_something();
 //          submit_after(std::move(self), seconds(1));
 //      });
+//
+//  Coroutines can solve the same problem with iteration (which itself requires
+//  that the coroutine implementation supports tail calls)
+//
+//      for (;;) {
+//          do_something();
+//          co_await seconds{1};
+//      }
 
 template<typename Callable>
 class Y {

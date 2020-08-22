@@ -12,6 +12,11 @@
 #include <type_traits>
 #include <utility>
 
+// we can't nodiscard a constructor so we have a final_action struct made by
+// a function finally
+
+namespace detail {
+
 template<typename Callable>
 class final_action {
     
@@ -58,9 +63,11 @@ public:
     
 };
 
+} // namespace detail
+
 template<typename Callable>
-[[nodiscard]] final_action<std::decay_t<Callable>> finally(Callable&& callable) {
-    return final_action<std::decay_t<Callable>>(std::forward<Callable>(callable));
+[[nodiscard]] detail::final_action<std::decay_t<Callable>> finally(Callable&& callable) {
+    return detail::final_action<std::decay_t<Callable>>(std::forward<Callable>(callable));
 }
 
 
