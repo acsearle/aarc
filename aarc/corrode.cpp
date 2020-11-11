@@ -16,7 +16,7 @@
 
 #include "atomic_wait.hpp"
 #include "corrode.hpp"
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 #include "pool.hpp"
 #include "reactor.hpp"
 

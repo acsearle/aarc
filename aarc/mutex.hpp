@@ -12,139 +12,143 @@
 #include <condition_variable>
 #include <mutex>
 
-class condition_variable;
-
-template<typename T, typename M = std::mutex>
-class mutex {
+namespace rust {
     
-    mutable M _mutex;
-    mutable T _payload;
+    class Condvar;
     
-public:
-    
-    mutex() = default;
-    
-    template<typename... Args>
-    mutex(Args&&... args) : _payload(std::forward<Args>(args)...) {}
-    
-    mutex(mutex const&) = delete;
-    mutex(mutex& other) : _payload(other._payload) {}
-    mutex(mutex&& other) :_payload(std::move(other._payload)) {}
-    mutex(mutex const&&) = delete;
-    
-    class guard {
+    template<typename T, typename M = std::mutex>
+    class Mutex {
         
-        friend class mutex;
-        friend class condition_variable;
-        
-        mutex const* _ptr;
-        
-        explicit guard(mutex const* p) : _ptr(p) {}
+        mutable M _mutex;
+        mutable T _payload;
         
     public:
         
-        guard() : _ptr{0} {}
-                        
-        guard(guard const&) = delete;
-
-        guard(guard&& other)
-        : _ptr(std::exchange(other._ptr, nullptr)) {
+        Mutex() = default;
+        
+        template<typename... Args>
+        Mutex(Args&&... args) : _payload(std::forward<Args>(args)...) {}
+        
+        Mutex(Mutex const&) = delete;
+        Mutex(Mutex& other) : _payload(other._payload) {}
+        Mutex(Mutex&& other) :_payload(std::move(other._payload)) {}
+        Mutex(Mutex const&&) = delete;
+        
+        class Guard {
+            
+            friend class Mutex;
+            friend class Condvar;
+            
+            Mutex const* _ptr;
+            
+            explicit Guard(Mutex const* p) : _ptr(p) {}
+            
+        public:
+            
+            Guard() : _ptr{0} {}
+            
+            Guard(Guard const&) = delete;
+            
+            Guard(Guard&& other)
+            : _ptr(std::exchange(other._ptr, nullptr)) {
+            }
+            
+            ~Guard() {
+                if (_ptr)
+                    _ptr->_mutex.unlock();
+            }
+            
+            void swap(Guard& other) {
+                using std::swap;
+                swap(_ptr, other._ptr);
+            }
+            
+            Guard& operator=(Guard const&) = delete;
+            
+            Guard& operator=(Guard&& other) {
+                Guard(std::move(other)).swap(*this);
+                return *this;
+            }
+            
+            explicit operator bool() const {
+                return _ptr;
+            }
+            
+            T* operator->() /* mutable */ {
+                assert(_ptr);
+                return &_ptr->_payload;
+            }
+            
+            T& operator*() /* mutable */ {
+                assert(_ptr);
+                return _ptr->_payload;
+            }
+            
+        };
+        
+        Guard lock() = delete;
+        Guard lock() const {
+            _mutex.lock();
+            return Guard{this};
         }
         
-        ~guard() {
-            if (_ptr)
-                _ptr->_mutex.unlock();
+        Guard try_lock() = delete;
+        Guard try_lock() const {
+            return Guard{_mutex.try_lock() ? this : nullptr};
         }
         
-        void swap(guard& other) {
-            using std::swap;
-            swap(_ptr, other._ptr);
+        T* operator->() {
+            return &_payload;
         }
         
-        guard& operator=(guard const&) = delete;
-
-        guard& operator=(guard&& other) {
-            guard(std::move(other)).swap(*this);
-            return *this;
-        }
-
-        explicit operator bool() const {
-            return _ptr;
+        Guard operator->() const {
+            return lock();
         }
         
-        T* operator->() /* mutable */ {
-            assert(_ptr);
-            return &_ptr->_payload;
+        T& operator*() {
+            return _payload;
         }
         
-        T& operator*() /* mutable */ {
-            assert(_ptr);
-            return _ptr->_payload;
+        T into_inner() && {
+            return std::move(_payload);
         }
         
     };
     
-    guard lock() = delete;
-    guard lock() const {
-        _mutex.lock();
-        return guard(this);
-    }
-    
-    guard try_lock() = delete;
-    guard try_lock() const {
-        return guard(_mutex.try_lock() ? this : nullptr);
-    }
-    
-    T* operator->() {
-        return &_payload;
-    }
-    
-    guard operator->() const {
-        return lock();
-    }
-    
-    T& operator*() {
-        return _payload;
-    }
-        
-    T into_inner() && {
-        return std::move(_payload);
-    }
-    
-};
-
-template<typename T>
-mutex(T&&) -> mutex<std::decay_t<T>>;
-
-class condition_variable {
-    
-    std::condition_variable _cv;
-    
-public:
-    
     template<typename T>
-    void wait(typename mutex<T>::guard& guard) {
-        auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
-        auto releaser = finally([&] { lock.release(); });
-        _cv.wait(lock);
-    }
+    Mutex(T&&) -> Mutex<std::decay_t<T>>;
     
-    template<typename T, typename Predicate>
-    void wait(typename mutex<T>::guard& guard, Predicate&& predicate) {
-        auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
-        auto releaser = finally([&] { lock.release(); });
-        while (!predicate(*guard))
-               _cv.wait(lock);
-    }
+    class Condvar {
+        
+        std::condition_variable _cv;
+        
+    public:
+        
+        template<typename T>
+        void wait(typename Mutex<T>::Guard& guard) {
+            auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
+            auto releaser = finally([&] { lock.release(); });
+            _cv.wait(lock);
+        }
+        
+        template<typename T, typename Predicate>
+        void wait(typename Mutex<T>::Guard& guard, Predicate&& predicate) {
+            auto lock = std::unique_lock(guard._ptr->_mutex, std::adopt_lock);
+            auto releaser = finally([&] { lock.release(); });
+            while (!predicate(*guard))
+                _cv.wait(lock);
+        }
+        
+        void notify_one() {
+            _cv.notify_one();
+        }
+        
+        void notify_all() {
+            _cv.notify_all();
+        }
+        
+    };
     
-    void notify_one() {
-        _cv.notify_one();
-    }
-    
-    void notify_all() {
-        _cv.notify_all();
-    }
-    
-};
+} // namespace rust
 
 #endif /* mutex_hpp */

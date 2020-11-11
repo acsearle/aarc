@@ -11,6 +11,9 @@
 
 #include "fn.hpp"
 
+using rust::u64;
+using namespace aarc;
+
 template<typename>
 struct stack;
 
@@ -27,7 +30,7 @@ struct stack<fn<R(Args...)>> {
         return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
     }
     
-    atomic<u64> _head;
+    mutable u64 _head;
 
     stack()
     : _head{0} {
@@ -115,14 +118,14 @@ struct stack<fn<R(Args...)>> {
     
     stack exchange(stack x) = delete;
     stack exchange(stack x) const {
-        return atomic{_head.exchange(std::exchange(x._next, 0), std::memory_order_acq_rel)};
+        return stack { atomic_exchange(&_head, std::exchange(x._next, 0), std::memory_order_acq_rel) };
     }
         
     bool push(fn<R(Args...)> x) const {
         if (x) {
-            u64 old = _head.load(std::memory_order_relaxed);
+            u64 old = atomic_load(&_head, std::memory_order_relaxed);
             x->_next = old;
-            while (!_head.compare_exchange_weak(x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
+            while (!atomic_compare_exchange_weak(&_head, &x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
                 old = x->_next;
             x._value = 0;
             return !cptr(old); // <-- did we transition from empty to nonempty?
@@ -135,9 +138,9 @@ struct stack<fn<R(Args...)>> {
         if (p) {
             while (auto q = mptr(p->_next))
                 p = q;
-            u64 old = _head.load(std::memory_order_relaxed);
+            u64 old = atomic_load(&_head, std::memory_order_relaxed);
             p->_next = old;
-            while (!_head.compare_exchange_weak(p->_next, x._head, std::memory_order_release, std::memory_order_relaxed))
+            while (!atomic_compare_exchange_weak(&_head, &p->_next, x._head, std::memory_order_release, std::memory_order_relaxed))
                 old = p->_next;
             x._head = 0;
             return !cptr(old); // <-- did we transition from empty to nonempty?
@@ -147,22 +150,22 @@ struct stack<fn<R(Args...)>> {
     
     stack take() = delete;
     stack take() const {
-        return stack{_head.exchange(0, std::memory_order_acquire)};
+        return stack{atomic_exchange(&_head, (u64) 0, std::memory_order_acquire)};
     }
 
     void wait() = delete;
     void wait() const {
-        _head.wait(0, std::memory_order_acquire);
+        atomic_wait(&_head, 0, std::memory_order_acquire);
     }
     
     void notify_one() = delete;
     void notify_one() const {
-        _head.notify_one();
+        atomic_notify_one(&_head);
     }
 
     void notify_all() = delete;
     void notify_all() const {
-        _head.notify_all();
+        atomic_notify_all(&_head);
     }
 
     stack& unsafe_reference() = delete;
@@ -176,7 +179,7 @@ struct stack<fn<R(Args...)>> {
     
     struct iterator {
         
-        atomic<u64>* _ptr;
+        u64* _ptr;
         
         iterator& operator++() {
             assert(_ptr);

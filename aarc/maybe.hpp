@@ -17,7 +17,6 @@ union maybe {
     T value;
     
     maybe() {}
-    maybe(maybe const&) = default;
     ~maybe() {}
         
     template<typename... Args>

@@ -15,6 +15,8 @@
 #include "counted.hpp"
 #include "finally.hpp"
 
+namespace aarc {
+
 // provides reference counting, intrusive linked list, type erasure
 
 template<typename T>
@@ -30,8 +32,8 @@ public:
     //     __vtbl
     //     fields...
     
-    atomic<u64> count;
-    atomic<counted<T const*>> next;
+    mutable u64 count;
+    mutable CountedPtr<node> next;
     
     node(node const&) = delete;
 
@@ -53,16 +55,24 @@ public:
         a.disarm();
         return q;
     }
+    
+    static node* make_empty() {
+        void* p = operator new (sizeof(node));
+        auto a = finally([=] { operator delete(p); });
+        new (p) node;
+        node* q = static_cast<node*>(p);
+        return q;
+    }
         
     void erase() const {
         reinterpret_cast<T const*>(this + 1)->~T();
     }
     
     u64 release(u64 n) const {
-        auto m = count.fetch_sub(n, std::memory_order_release);
+        auto m = atomic_fetch_sub(&count, n, std::memory_order_release);
         assert(m >= n);
         if (m == n) {
-            [[maybe_unused]] auto z = count.load(std::memory_order_acquire);
+            [[maybe_unused]] auto z = atomic_load(&count, std::memory_order_acquire);
             assert(z == 0);
             delete this;
         }
@@ -84,5 +94,6 @@ public:
     
 }; // node
 
+} // namespace aarc
 
 #endif /* node_hpp */

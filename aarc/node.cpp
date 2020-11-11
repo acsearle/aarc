@@ -13,7 +13,7 @@
 #include "node.hpp"
 #include "maybe.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 TEST_CASE("node", "[node]") {
         

@@ -31,7 +31,8 @@
 //      });
 //
 //  Coroutines can solve the same problem with iteration (which itself requires
-//  that the coroutine implementation supports tail calls)
+//  that the coroutine implementation supports symmetric transfer aka tail
+//  calls)
 //
 //      for (;;) {
 //          do_something();

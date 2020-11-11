@@ -8,7 +8,7 @@
 
 #include "reactor.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 reactor::reactor()
 : _cancelled_and_notifications{0} {
@@ -65,8 +65,9 @@ void reactor::_run() const {
         
         {
             // establish an ordering between this read and the writes that preceeded notifications
-            auto old = _cancelled_and_notifications.fetch_and(CANCELLED_BIT,
-                                                              std::memory_order_acquire);
+            auto old = atomic_fetch_and(&_cancelled_and_notifications,
+                                        CANCELLED_BIT,
+                                        std::memory_order_acquire);
             if (old & CANCELLED_BIT)
                 break;
             outstanding += old;

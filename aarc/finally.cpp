@@ -8,15 +8,19 @@
 
 #include "finally.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
-TEST_CASE("finally") {
+namespace gsl {
     
-    bool a = false;;
-    {
-        auto guard = finally([&] { a = true; });
-        REQUIRE_FALSE(a);
+    TEST_CASE("finally") {
+        
+        bool a = false;;
+        {
+            auto guard = finally([&] { a = true; });
+            REQUIRE_FALSE(a);
+        }
+        REQUIRE(a);
+        
     }
-    REQUIRE(a);
     
-}
+} // namespace gsl

@@ -281,4 +281,79 @@ struct future<void> {
 };
 
 
+
+template<typename T>
+struct Generator {
+        
+    struct promise_type {
+        
+        auto get_return_object() {
+            return Generator {
+                std::experimental::coroutine_handle<promise_type>::from_promise(*this)
+            };
+        }
+        
+        auto initial_suspend() {
+            return std::experimental::suspend_always{};
+        }
+        
+        auto final_suspend() {
+            return std::experimental::suspend_always{};
+        }
+        
+        template<typename U>
+        auto yield_value(U&& u) {
+            _value = &u;
+            return std::experimental::suspend_always{};
+        }
+        
+        void unhandled_exception() {
+            abort();
+        }
+        
+        void return_void() {}
+        
+        T* _value;
+        
+    };
+    
+    std::experimental::coroutine_handle<promise_type> _coroutine;
+    
+    struct sentinel {};
+    
+    struct iterator {
+
+        std::experimental::coroutine_handle<promise_type> _coroutine;
+        
+        iterator& operator++() {
+            _coroutine.resume();
+            return *this;
+        }
+        
+        bool operator!=(sentinel) {
+            return !_coroutine.done();
+        }
+        
+        T& operator*() {
+            return *_coroutine.promise()._value;
+        }
+
+    };
+    
+    iterator begin() {
+        _coroutine.resume();
+        return iterator { _coroutine };
+    }
+    
+    sentinel end() {
+        return sentinel {};
+    }
+    
+    ~Generator() {
+        _coroutine.destroy();
+    }
+    
+    
+};
+
 #endif /* corrode_hpp */

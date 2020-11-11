@@ -40,20 +40,20 @@ struct reactor {
     alignas(64) stack<fn<void()>> _writers_buf;
     alignas(64) stack<fn<void()>> _excepters_buf;
     alignas(64) stack<fn<void()>> _timers_buf;
-    alignas(64) atomic<std::uint64_t> _cancelled_and_notifications;
+    alignas(64) mutable std::uint64_t _cancelled_and_notifications;
 
     // single thread that waits on select
     std::thread _thread;
 
     // notification pipe
     int _pipe[2];
-    static constexpr std::uint64_t CANCELLED_BIT = 0x1000'0000'0000'0000;
+    static constexpr std::uint64_t CANCELLED_BIT = 0x8000'0000'0000'0000;
 
     reactor();    
     ~reactor();
     
     void _notify() const {
-        auto old = _cancelled_and_notifications.fetch_or(1, std::memory_order_release);
+        auto old = atomic_fetch_or(&_cancelled_and_notifications, 1, std::memory_order_release);
         if (!(old & 1)) {
             unsigned char c{0};
             if (write(_pipe[1], &c, 1) != 1) // <-- multiple writers are possible
@@ -100,8 +100,9 @@ struct reactor {
     }
     
     void _cancel() const {
-        _cancelled_and_notifications.fetch_or(CANCELLED_BIT,
-                                              std::memory_order_release);
+        atomic_fetch_or(&_cancelled_and_notifications,
+                        CANCELLED_BIT,
+                        std::memory_order_release);
         _notify();
     }
         

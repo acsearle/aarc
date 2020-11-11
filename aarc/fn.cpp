@@ -8,7 +8,7 @@
 
 #include "fn.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 TEST_CASE("fn", "[fn]") {
 

@@ -8,7 +8,7 @@
 
 #include "journal.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 /*
  
@@ -36,12 +36,15 @@ void operator delete(void* p) noexcept {
 }
  
  */
-
+namespace aarc {
+    
 TEST_CASE("journal") {
     
     journal::enter("hello");
     
     auto x = journal::take<char const*>();
     printf("%s\n", std::get<0>(x.front().second.front()));
+    
+}
     
 }

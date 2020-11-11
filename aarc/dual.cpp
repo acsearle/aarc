@@ -16,7 +16,7 @@
 #include "y.hpp"
 #include "stack.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 // a lock-free dual atomic data structure that is either a queue of tasks,
 // a stack of waiters, or empty
@@ -29,6 +29,8 @@
 //
 // if task submission is delayed until the end of the current job (as in
 // asio::dispatch), we can gain efficiency
+
+using namespace aarc;
 
 struct dual {
     
@@ -57,8 +59,8 @@ struct dual {
     // check for pointer-tag equality, ignoring counter
     static bool cmp(u64 a, u64 b) { return !((a ^ b) & ~CNT); }
     
-    alignas(64) atomic<u64> _head;
-    alignas(64) atomic<u64> _tail;
+    alignas(64) mutable u64 _head;
+    alignas(64) mutable u64 _tail;
             
     dual() {
         auto p = new detail::node<void()>;
@@ -121,55 +123,55 @@ struct dual {
     // bitwise idioms:
     //
     //               p & PTR <=> ptr(p) != nullptr
-    //           p ^ q & PTR <=> ptr(p) != ptr(q)
+    //         (p ^ q) & PTR <=> ptr(p) != ptr(q)
     //     p & (p - 1) & CNT <=> cnt(p) == 2^n + 1
     //              p &  CNT <=> cnt(p) > 1
     //              p & ~CNT <=> cnt(p & ~CNT) == 1
     //              p |  CNT <=> cnt(p |  CNT) == 0x1'0000
     //              p -  INC <=> cnt(p -  INC) == cnt(p) - 1
 
-    static std::pair<u64, u64> _acquire(atomic<u64> const& p, u64 expected) {
+    static std::pair<u64, u64> _acquire(u64& p, u64 expected) {
         for (;;) {
             assert(expected & PTR); // <-- nonnull pointer bits
             if (__builtin_expect(expected & CNT, true)) { // <-- nonzero counter bits
                 u64 desired = expected - INC;
-                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
+                if (atomic_compare_exchange_weak(&p, &expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
                     if (__builtin_expect(expected & desired & CNT, true)) {
                         return {desired, 1}; // <-- fast path completes
                     } else { // <-- counter is a power of two
                         expected = desired;
-                        ptr(expected)->_count.fetch_add(LOW, std::memory_order_relaxed);
-                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
+                        atomic_fetch_add(&ptr(expected)->_count, LOW, std::memory_order_relaxed);
+                        do if (atomic_compare_exchange_weak(&p, &expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
                             if (__builtin_expect((expected & CNT) == 0, false)) // <-- we fixed an exhausted counter
-                                p.notify_all();        // <-- notify potential waiters
+                                atomic_notify_all(&p);        // <-- notify potential waiters
                             return{desired, cnt(expected)};
                         } while (!((expected ^ desired) & PTR)); // <-- while the pointer bits are unchanged
                         ptr(desired)->release(1 + LOW); // <-- start over
                     }
                 }
             } else { // <-- the counter is zero
-                p.wait(expected, std::memory_order_relaxed); // <-- until counter may have changed
-                expected = p.load(std::memory_order_relaxed);
+                atomic_wait(&p, expected, std::memory_order_relaxed); // <-- until counter may have changed
+                expected = atomic_load(&p, std::memory_order_relaxed);
             }
         }
     }
     
-    static std::pair<u64, u64> _acquire_specific(atomic<u64> const& p, u64 const specific) {
+    static std::pair<u64, u64> _acquire_specific(u64& p, u64 const specific) {
         assert(specific & PTR);
         u64 expected = specific;
         do {
             if (__builtin_expect(expected & CNT, true)) {
                 u64 desired = expected - INC;
-                if (p.compare_exchange_weak(expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
+                if (atomic_compare_exchange_weak(&p, &expected, desired, std::memory_order_acquire, std::memory_order_relaxed)) {
                     if (__builtin_expect(expected & desired & CNT, true)) {
                         assert(!((desired ^ specific) & PTR));
                         return {desired, 1}; // <-- fast path completes
                     } else { // <-- count is a power of two, perform housekeeping
                         expected = desired;
-                        ptr(specific)->_count.fetch_add(LOW, std::memory_order_relaxed);
-                        do if (p.compare_exchange_weak(expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
+                        atomic_fetch_add(&ptr(specific)->_count, LOW, std::memory_order_relaxed);
+                        do if (atomic_compare_exchange_weak(&p, &expected, desired = expected | CNT, std::memory_order_release, std::memory_order_relaxed)) {
                             if (__builtin_expect((expected & CNT) == 0, false)) // <-- we fixed an exhausted counter
-                                p.notify_all();        // <-- notify potential waiters
+                                atomic_notify_all(&p);        // <-- notify potential waiters
                             assert(!((desired ^ specific) & PTR));
                             return{desired, cnt(expected)};
                         } while (!((expected ^ specific) & PTR)); // <-- while the pointer bits are unchanged
@@ -177,8 +179,8 @@ struct dual {
                     }
                 }
             } else {
-                p.wait(expected, std::memory_order_relaxed);
-                expected = p.load(std::memory_order_relaxed);
+                atomic_wait(&p, expected, std::memory_order_relaxed);
+                expected = atomic_load(&p, std::memory_order_relaxed);
             }
         } while (!((expected ^ specific) & PTR));
         return {expected, 0};
@@ -224,14 +226,14 @@ struct dual {
         u64 n = 0;
     
     _load_tail:
-        a = _tail.load(std::memory_order_relaxed);
+        a = atomic_load(&_tail, std::memory_order_relaxed);
     _acquire_tail:
         assert(m == 0);
         std::tie(b, m) = _acquire(_tail, a);
         a = b;
     _load_next:
         assert(m > 0);
-        c = ptr(a)->_next.load(std::memory_order_acquire);
+        c = atomic_load(&ptr(a)->_next, std::memory_order_acquire);
     _classify_next:
         if (c == 0)     // <-- end of queue
             goto _push;
@@ -243,7 +245,7 @@ struct dual {
         
         
     _push: // add the new node (or, if there is no new node, we failed to try_pop a stack node)
-        if (z && !ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
+        if (z && !atomic_compare_exchange_strong(&ptr(a)->_next, &c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
             goto _classify_next;
         ptr(a)->release(m);
         assert(n == 0);
@@ -251,10 +253,10 @@ struct dual {
         
         
     _swing_tail: // move stale tail forwards
-        if (!_tail.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
+        if (!atomic_compare_exchange_weak(&_tail, &b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_tail_failed;
         if (__builtin_expect(!(b & CNT) && (c & CNT), false))  // <-- we happened to fix a counter
-            _tail.notify_all();
+            atomic_notify_all(&_tail);
         ptr(a)->release(m + cnt(b));
         a = c;
         b = c;
@@ -278,9 +280,9 @@ struct dual {
         std::tie(c, n) = _acquire_specific(ptr(a)->_next, c);
         if (n == 0)
             goto _classify_next;
-        e = ptr(c)->_next.load(std::memory_order_relaxed);
+        e = atomic_load(&ptr(c)->_next, std::memory_order_relaxed);
     _pop_next:
-        if (!ptr(a)->_next.compare_exchange_weak(d = c, e, std::memory_order_acquire, std::memory_order_relaxed))
+        if (!atomic_compare_exchange_weak(&ptr(a)->_next, &(d = c), e, std::memory_order_acquire, std::memory_order_relaxed))
             goto _pop_next_failed;
         ptr(a)->release(m);
         assert(c + (n << 48) > c);
@@ -296,6 +298,7 @@ struct dual {
         goto _classify_next;
         
     };
+    
     
     [[nodiscard]] u64 _pop_item_or_push_promise(u64 z = 0) const {
         
@@ -315,14 +318,14 @@ struct dual {
         u64 m = 0;
         
     _load_head:
-        a = _head.load(std::memory_order_relaxed);
+        a = atomic_load(&_head, std::memory_order_relaxed);
     _acquire_head:
         assert(m == 0);
         std::tie(b, m) = _acquire(_head, a);
         a = b;
     _load_next:
         assert(a & PTR);
-        c = ptr(a)->_next.load(std::memory_order_acquire);
+        c = atomic_load(&ptr(a)->_next, std::memory_order_acquire);
     _classify_next:
         assert(((c & PTR) && !(c & TAG)) == ((c & ~PTR) == 0xFFFE'0000'0000'0000));
         if ((c & PTR) && !(c & TAG))
@@ -332,7 +335,7 @@ struct dual {
             z = (z & ~TAG) | ((c & TAG) < TAG ? (c & TAG) + 1 : TAG); // <-- use tag bits to track stack depth why not
             assert(z & TAG);
             mptr(z)->_next = c;
-            if (!ptr(a)->_next.compare_exchange_strong(c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
+            if (!atomic_compare_exchange_strong(&ptr(a)->_next, &c, z, std::memory_order_acq_rel, std::memory_order_relaxed))
                 goto _classify_next;
         }
         ptr(a)->release(m);
@@ -340,10 +343,10 @@ struct dual {
         return 0;
                         
     _swing_head: // <-- advance head to claim a queue node
-        if (!_head.compare_exchange_weak(b, c, std::memory_order_release, std::memory_order_relaxed))
+        if (!atomic_compare_exchange_weak(&_head, &b, c, std::memory_order_release, std::memory_order_relaxed))
             goto _swing_head_failed;
         if (__builtin_expect(!(b & CNT) && (c & CNT), false)) // <-- we happened to fix a counter
-            _head.notify_all();
+            atomic_notify_all(&_head);
         ptr(a)->release(cnt(b) + m);
         return (c & ~CNT);
         
@@ -367,12 +370,13 @@ struct dual {
         if (waiter) {
             assert(waiter & PTR);
             [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
-            ptr(waiter)->_promise.store(std::exchange(x._value, 0), std::memory_order_release);
-            ptr(waiter)->_promise.notify_one();
+            atomic_store(&ptr(waiter)->_promise, std::exchange(x._value, 0), std::memory_order_release);
+            atomic_notify_one(&ptr(waiter)->_promise);
             ptr(waiter)->release(cnt(waiter));
         }
         return (bool) waiter;
     }
+    
     
     void push(fn<void()> x) const {
         assert(x._value & PTR);
@@ -380,8 +384,8 @@ struct dual {
         if (waiter) {
             assert(waiter & PTR);
             [[maybe_unused]] u64 n = waiter & TAG; // <-- there were n waiters (saturating count)
-            ptr(waiter)->_promise.store(std::exchange(x._value, 0), std::memory_order_release);
-            ptr(waiter)->_promise.notify_one();
+            atomic_store(&ptr(waiter)->_promise, std::exchange(x._value, 0), std::memory_order_release);
+            atomic_notify_one(&ptr(waiter)->_promise);
             ptr(waiter)->release(cnt(waiter));
         } else {
             x._value = 0; // <-- we gave up ownership
@@ -414,8 +418,8 @@ struct dual {
             mptr(task)->mut_call_and_erase_and_release(cnt(task));
         } else {
             detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
-            ptr->_promise.wait(0, std::memory_order_relaxed);
-            task = ptr->_promise.load(std::memory_order_acquire);
+            atomic_wait(&ptr->_promise, 0, std::memory_order_relaxed);
+            task = atomic_load(&ptr->_promise, std::memory_order_acquire);
             ptr->release(1);
             assert(task);
             mptr(task)->mut_call_and_erase_and_delete();
@@ -432,8 +436,8 @@ struct dual {
             } else {
                 detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
                 promise.reset(new detail::node<void()>);
-                ptr->_promise.wait(0, std::memory_order_relaxed);
-                task = ptr->_promise.load(std::memory_order_acquire);
+                atomic_wait(&ptr->_promise, 0, std::memory_order_relaxed);
+                task = atomic_load(&ptr->_promise, std::memory_order_acquire);
                 ptr->release(1);
                 assert(task);
                 mptr(task)->mut_call_and_erase_and_delete();
@@ -466,8 +470,8 @@ struct dual {
                 mptr(f)->mut_call_and_erase_and_release(cnt(f));
             } else {
                 detail::node<void()> const* ptr = promise.release(); // <-- now managed by queue
-                ptr->_promise.wait(0, std::memory_order_relaxed);
-                u64 g = ptr->_promise.load(std::memory_order_acquire);
+                atomic_wait(&ptr->_promise, 0, std::memory_order_relaxed);
+                u64 g = atomic_load(&ptr->_promise, std::memory_order_acquire);
                 ptr->release(1);
                 mptr(g)->mut_call_and_erase_and_delete();
                 promise.reset(new detail::node<void()>);
@@ -480,7 +484,7 @@ struct dual {
 
 
 TEST_CASE("dual", "[dual]") {
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
 
     {
     int z = 0;
@@ -499,18 +503,18 @@ TEST_CASE("dual", "[dual]") {
     a.pop_and_call();
     REQUIRE(z == 3);
     }
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
 
 }
 
 TEST_CASE("dual-multi", "[dual]") {
     
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
     {
     dual d;
     auto n = std::thread::hardware_concurrency();
     std::vector<std::thread> t;
-    const atomic<u64> a{0};
+    u64 a{0};
     
     // make some workers
     for (decltype(n) i = 0; i != n; ++i) {
@@ -526,14 +530,14 @@ TEST_CASE("dual-multi", "[dual]") {
     // submit tasks to each flip one bit of a u64
     for (int i = 0; i != 64; ++i) {
         d.push([&a, i] {
-            a.fetch_xor(1ull << i, std::memory_order_relaxed);
-            a.notify_one();
+            atomic_fetch_xor(&a, 1ull << i, std::memory_order_relaxed);
+            atomic_notify_one(&a);
         });
     }
     // wait until all bits are set (which requires all jobs to have run once or
     // an odd number of times)
-    while (auto b = ~a.load(std::memory_order_relaxed)) {
-        a.wait(~b, std::memory_order_relaxed);
+    while (auto b = ~atomic_load(&a, std::memory_order_relaxed)) {
+        atomic_wait(&a, ~b, std::memory_order_relaxed);
     }
     REQUIRE(true);
 
@@ -548,18 +552,18 @@ TEST_CASE("dual-multi", "[dual]") {
         t.pop_back();
     }
     }
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
     
 }
 
 TEST_CASE("dual-exhaust", "[dual]") {
     {
-        printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+        printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
         
         dual d;
         auto n = std::thread::hardware_concurrency();
         std::vector<std::thread> t;
-        const atomic<u64> a{0};
+        u64 a{0};
         
         // make some workers
         for (decltype(n) i = 0; i != n; ++i) {
@@ -609,7 +613,7 @@ TEST_CASE("dual-exhaust", "[dual]") {
         printf("submitted %llu jobs\n", y.load(std::memory_order_relaxed));
         printf("executed  %llu jobs\n", z.load(std::memory_order_relaxed));
     }
-    printf("extant: %llu\n", detail::node<void()>::_extant.load(std::memory_order_relaxed));
+    printf("extant: %llu\n", atomic_load(&detail::node<void()>::_extant, std::memory_order_relaxed));
     
 }
 

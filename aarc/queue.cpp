@@ -10,11 +10,11 @@
 
 #include "queue.hpp"
 
-#include "catch.hpp"
+#include <catch2/catch.hpp>
 
 TEST_CASE("Queue") {
 
-    atomic<queue<int>> a;
+    Atomic<queue<int>> a;
     
     auto N = 1'000;
     auto M = 16;

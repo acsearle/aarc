@@ -12,64 +12,68 @@
 #include <type_traits>
 #include <utility>
 
+// from GSL
+
 // we can't nodiscard a constructor so we have a final_action struct made by
 // a function finally
 
-namespace detail {
-
-template<typename Callable>
-class final_action {
+namespace gsl {
     
-    Callable _callable;
-    bool _flag;
+    namespace detail {
+        
+        template<typename Callable>
+        class final_action {
+            
+            Callable _callable;
+            bool _flag;
+            
+        public:
+            
+            final_action()
+            : _callable()
+            , _flag(false) {
+            }
+            
+            final_action(Callable const& callable)
+            : _callable(callable)
+            , _flag(true) {
+            }
+            
+            final_action(Callable&& callable) noexcept
+            : _callable(std::move(callable))
+            , _flag(true) {
+            }
+            
+            final_action(final_action const&) = delete;
+            
+            final_action(final_action&& other) noexcept
+            : _callable(std::move(other._callable))
+            , _flag(std::exchange(other._flag, false)) {
+            }
+            
+            ~final_action() noexcept {
+                if (_flag)
+                    _callable();
+            }
+            
+            final_action& operator=(final_action const&) = delete;
+            
+            final_action& operator=(final_action&& other) noexcept {
+                _callable = std::move(other._callable); // <-- likely to hit lambda irregularity
+                _flag = std::exchange(other._callable, false);
+            }
+            
+            void disarm() { _flag = false; }
+            
+        }; // class final_action<Callable>
+        
+    } // namespace detail
     
-public:
-    
-    final_action()
-    : _callable()
-    , _flag(false) {
+    template<typename Callable>
+    [[nodiscard]] detail::final_action<std::decay_t<Callable>> finally(Callable&& callable) {
+        return { std::forward<Callable>(callable) };
     }
     
-    final_action(Callable const& callable)
-    : _callable(callable)
-    , _flag(true) {
-    }
-    
-    final_action(Callable&& callable) noexcept
-    : _callable(std::move(callable))
-    , _flag(true) {
-    }
-    
-    final_action(final_action const&) = delete;
-    
-    final_action(final_action&& other) noexcept
-    : _callable(std::move(other._callable))
-    , _flag(std::exchange(other._flag, false)) {
-    }
-    
-    ~final_action() noexcept {
-        if (_flag)
-            _callable();
-    }
-    
-    final_action& operator=(final_action const&) = delete;
-    
-    final_action& operator=(final_action&& other) noexcept {
-        _callable = std::move(other._callable); // <-- likely to hit lambda irregularity
-        _flag = std::exchange(other._callable, false);
-    }
-    
-    void disarm() { _flag = false; }
-    
-};
-
-} // namespace detail
-
-template<typename Callable>
-[[nodiscard]] detail::final_action<std::decay_t<Callable>> finally(Callable&& callable) {
-    return detail::final_action<std::decay_t<Callable>>(std::forward<Callable>(callable));
 }
-
-
 
 #endif /* finally_hpp */
