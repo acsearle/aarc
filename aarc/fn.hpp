@@ -16,6 +16,9 @@
 #include "common.hpp"
 #include "maybe.hpp"
 #include "finally.hpp"
+#include "counted.hpp"
+
+using namespace aarc;
 
 // fn is a polymorphic function wrapper like std::function
 //
@@ -55,7 +58,7 @@ namespace detail {
         // 16: _count
         // 24: { _fd, _flags } + _t + _promise
         
-        mutable u64 _next;
+        mutable CountedPtr<node> _next;
         mutable u64 _count;
         
         union {
@@ -64,13 +67,13 @@ namespace detail {
                 int _flags;
             };
             std::chrono::time_point<std::chrono::steady_clock> _t;
-            mutable u64 _promise;
+            mutable CountedPtr<node> _promise;
         };
         
         node()
-        : _next{0}
+        : _next{nullptr}
         , _count{0}
-        , _promise{0} {
+        , _promise{nullptr} {
             atomic_fetch_add(&_extant, 1, std::memory_order_relaxed);
         }
         
@@ -87,6 +90,10 @@ namespace detail {
             auto v = reinterpret_cast<u64>(new node);
             assert(!(v & ~PTR));
             return v;
+        }
+        
+        void acquire(u64 n) const {
+            auto m = atomic_fetch_add(&_count, n, std::memory_order_relaxed);
         }
         
         void release(u64 n) const {
@@ -180,36 +187,28 @@ template<typename> struct fn;
 template<typename R, typename... Args>
 struct fn<R(Args...)> {
     
-    static constexpr auto PTR = detail::PTR;
-    static constexpr auto TAG = detail::TAG;
+    CountedPtr<detail::node<R(Args...)>> _value;
     
-    u64 _value;
-    
-    static detail::node<R(Args...)>* ptr(u64 v) {
-        return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
-    }
-    
-    fn() : _value{0} {}
+    fn() : _value{nullptr} {}
     
     fn(fn const&) = delete;
     fn(fn&) = delete;
-    fn(fn&& other) : _value(std::exchange(other._value, 0)) {}
+    fn(fn&& other) : _value(std::exchange(other._value, nullptr)) {}
     fn(fn const&&) = delete;
     
     template<typename T, typename = std::void_t<decltype(std::declval<T>()())>>
-    fn(T f) {
+    fn(T f) : _value{nullptr} {
         auto p = new detail::wrapper<R(Args...), T>;
         p->_payload.emplace(std::forward<T>(f));
-        _value = reinterpret_cast<u64>(p);
-        assert(!(_value & ~PTR));
+        _value.ptr = p;
     }
     
-    explicit fn(std::uint64_t value)
+    explicit fn(CountedPtr<detail::node<R(Args...)>> value)
     : _value(value) {
     }
     
     fn try_clone() const {
-        auto p = ptr(_value);
+        auto p = _value.ptr;
         u64 v = 0;
         if (p)
             v = p->try_clone();
@@ -225,7 +224,7 @@ struct fn<R(Args...)> {
     }
     
     ~fn() {
-        if (auto p = ptr(_value))
+        if (auto p = _value.ptr)
             p->erase_and_delete();
     }
     
@@ -242,7 +241,7 @@ struct fn<R(Args...)> {
     }
     
     R operator()(Args... args) {
-        auto p = ptr(_value);
+        auto p = _value.ptr;
         assert(p);
         _value = 0;
         if constexpr (std::is_same_v<R, void>) {
@@ -255,7 +254,7 @@ struct fn<R(Args...)> {
     }
     
     operator bool() const {
-        return ptr(_value);
+        return _value.ptr;
     }
     
     std::uint64_t tag() const {
@@ -263,11 +262,11 @@ struct fn<R(Args...)> {
     }
     
     detail::node<R(Args...)>* operator->() {
-        return ptr(_value);
+        return _value.ptr;
     }
     
     detail::node<R(Args...)> const* operator->() const {
-        return ptr(_value);
+        return _value.ptr;
     }
     
 };

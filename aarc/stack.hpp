@@ -20,23 +20,13 @@ struct stack;
 template<typename R, typename... Args>
 struct stack<fn<R(Args...)>> {
     
-    static constexpr auto PTR = detail::PTR;
-    
-    static detail::node<R(Args...)> const* cptr(u64 v) {
-        return reinterpret_cast<detail::node<R(Args...)> const*>(v & PTR);
-    }
-
-    static detail::node<R(Args...)>* mptr(u64 v) {
-        return reinterpret_cast<detail::node<R(Args...)>*>(v & PTR);
-    }
-    
-    mutable u64 _head;
+    mutable CountedPtr<detail::node<R(Args...)>> _head;
 
     stack()
-    : _head{0} {
+    : _head{nullptr} {
     }
     
-    explicit stack(std::uint64_t v)
+    explicit stack(CountedPtr<detail::node<R(Args...)>> v)
     : _head{v} {
     }
     
@@ -70,9 +60,9 @@ struct stack<fn<R(Args...)>> {
     }
     
     void splice(stack x) {
-        auto p = mptr(x._head);
+        auto p = x._head;
         if (p) {
-            while (auto q = mptr(p->_next))
+            while (auto q = p->_next)
                 p = q;
             p->_next = _head;
             _head = x._head;
@@ -123,12 +113,12 @@ struct stack<fn<R(Args...)>> {
         
     bool push(fn<R(Args...)> x) const {
         if (x) {
-            u64 old = atomic_load(&_head, std::memory_order_relaxed);
+            auto old = atomic_load(&_head, std::memory_order_relaxed);
             x->_next = old;
             while (!atomic_compare_exchange_weak(&_head, &x->_next, x._value, std::memory_order_release, std::memory_order_relaxed))
                 old = x->_next;
             x._value = 0;
-            return !cptr(old); // <-- did we transition from empty to nonempty?
+            return !old.ptr; // <-- did we transition from empty to nonempty?
         }
         return false;
     }
@@ -138,12 +128,12 @@ struct stack<fn<R(Args...)>> {
         if (p) {
             while (auto q = mptr(p->_next))
                 p = q;
-            u64 old = atomic_load(&_head, std::memory_order_relaxed);
+            auto old = atomic_load(&_head, std::memory_order_relaxed);
             p->_next = old;
             while (!atomic_compare_exchange_weak(&_head, &p->_next, x._head, std::memory_order_release, std::memory_order_relaxed))
                 old = p->_next;
             x._head = 0;
-            return !cptr(old); // <-- did we transition from empty to nonempty?
+            return !old.ptr; // <-- did we transition from empty to nonempty?
         }
         return false;
     }
@@ -179,11 +169,11 @@ struct stack<fn<R(Args...)>> {
     
     struct iterator {
         
-        u64* _ptr;
+        CountedPtr<detail::node<R(Args...)>>* _ptr;
         
         iterator& operator++() {
             assert(_ptr);
-            _ptr = &mptr(*_ptr)->_next;
+            _ptr = &(*_ptr)->_next;
             return *this;
         }
         
@@ -195,15 +185,15 @@ struct stack<fn<R(Args...)>> {
         }
         
         detail::node<R(Args...)>& operator*() {
-            return *mptr(*_ptr);
+            return **_ptr;
         }
         
         detail::node<R(Args...)>* operator->() {
-            return mptr(*_ptr);
+            return (*_ptr).ptr;
         }
                 
         bool operator!=(iterator b) {
-            return ((*_ptr) ^ (*b._ptr)) & PTR;
+            return (*_ptr).ptr != (*b._ptr).ptr;
         }
         
         bool operator==(iterator b) {
@@ -211,7 +201,7 @@ struct stack<fn<R(Args...)>> {
         }
         
         bool operator!=(sentinel) {
-            return *_ptr & PTR;
+            return _ptr->ptr;
         }
         
         bool operator==(sentinel) {
@@ -227,7 +217,7 @@ struct stack<fn<R(Args...)>> {
     // after erasure, same iterator points at element after erased element
     fn<R(Args...)> erase(iterator it) {
         return fn<R(Args...)>{std::exchange(*it._ptr,
-                                   mptr(*it._ptr)->_next)};
+                                   (*it._ptr)->_next)};
     }
     
     // inserts before element pointed to by iterator

@@ -123,9 +123,10 @@ namespace aarc {
         }
         
         CountedPtr() = default;
-        
-        explicit CountedPtr(u64 x) { ptr.raw = x; }
-        CountedPtr(std::nullptr_t) { ptr.raw = 0; }
+        CountedPtr(int x) : raw(x) {}
+        CountedPtr(u64 x) : raw(x) {}
+        CountedPtr(std::nullptr_t) : raw(0) {}
+        CountedPtr(T* p) : raw((u64) p) {}
         CountedPtr(unpacked p) : CountedPtr(p.cnt, p.ptr, p.tag) {}
         CountedPtr(u64 n, T* p, u64 t) {
             ptr.raw = (((n - 1) << SHF)
@@ -139,7 +140,7 @@ namespace aarc {
         
         explicit operator u64&() { return ptr.raw; }
         explicit operator u64 const&() const { return ptr.raw; }
-        explicit operator bool() const = delete;
+        explicit operator bool() const { return self.ptr; }
         bool operator==(CountedPtr p) const { return (u64) *this == (u64) p; }
         bool operator!=(CountedPtr p) const { return !(*this != p); }
         CountedPtr& operator=(unpacked p) { return *this = CountedPtr(p); }
@@ -182,7 +183,7 @@ namespace aarc {
 
     template<typename T>
     void atomic_store(CountedPtr<T>* target,
-                      CountedPtr<T> desired,
+                      CountedPtr<std::type_identity_t<T>> desired,
                       std::memory_order order) {
         atomic_store(&target->raw,
                      desired.raw,
@@ -191,7 +192,7 @@ namespace aarc {
 
     template<typename T>
     CountedPtr<T> atomic_exchange(CountedPtr<T>* target,
-                                  CountedPtr<T> desired,
+                                  CountedPtr<std::type_identity_t<T>> desired,
                                   std::memory_order order) {
         return CountedPtr<T>(atomic_exchange(&target->raw,
                                              desired.raw,
@@ -200,8 +201,8 @@ namespace aarc {
 
     template<typename T>
     bool atomic_compare_exchange_weak(CountedPtr<T>* target,
-                                      CountedPtr<T>* expected,
-                                      CountedPtr<T> desired,
+                                      CountedPtr<std::type_identity_t<T>>* expected,
+                                      CountedPtr<std::type_identity_t<T>> desired,
                                       std::memory_order success,
                                       std::memory_order failure) {
         return atomic_compare_exchange_weak(&target->raw,
@@ -213,8 +214,8 @@ namespace aarc {
     
     template<typename T>
     bool atomic_compare_exchange_strong(CountedPtr<T>* target,
-                                        CountedPtr<T>* expected,
-                                        CountedPtr<T> desired,
+                                        CountedPtr<std::type_identity_t<T>>* expected,
+                                        CountedPtr<std::type_identity_t<T>> desired,
                                         std::memory_order success,
                                         std::memory_order failure) {
         return atomic_compare_exchange_strong(&target->raw,
@@ -226,7 +227,7 @@ namespace aarc {
     
     template<typename T>
     void atomic_wait(CountedPtr<T>* target,
-                     CountedPtr<T> old,
+                     CountedPtr<std::type_identity_t<T>> old,
                      std::memory_order order) {
         return atomic_wait(&target->raw,
                            old.raw,
@@ -242,6 +243,145 @@ namespace aarc {
     void atomic_notify_all(CountedPtr<T>* target) {
         return atomic_notify_all(&target->raw);
     }
+    
+    //
+    // Counted
+    //
+    
+    // acquire shared ownership of the pointee of an atomic counted pointer,
+    // whatever it may be
+    //
+    // on input, expected is a hint of the current value of target
+    // on output, expected is the current value of target
+    //
+    // returns units of ownership gained.  these must be released.
+    // return 0 if the pointer is null
+    // after the call, expected is the current value
+    // you must call release with the returned value NOT the value of expected.cnt
+    // the returned value is not always the change in expected.cnt (replenish path)
+    
+    template<typename T>
+    [[nodiscard]] u64 atomic_acquire(CountedPtr<T>* target,
+                                     CountedPtr<T>* expected,
+                                     std::memory_order failure = std::memory_order_relaxed) {
+        assert(target);
+        assert(expected);
+        do if (auto n = atomic_compare_acquire_weak(target, expected, failure))
+            return n;
+        while (expected->ptr);
+        return 0;
+    }
+    
+    template<typename T>
+    bool healthy(CountedPtr<T> p) {
+        using U = CountedPtr<T>;
+        return (u64) p & ((u64) p + U::INC) & U::CNT;
+    }
+    
+    // attempt to acquire shared ownership of target if the pointer bits are as
+    // expected; spurious failure is permitted
+    
+    template<typename T>
+    [[nodiscard]] u64 atomic_compare_acquire_weak(CountedPtr<T>* target,
+                                                  CountedPtr<T>* expected,
+                                                  std::memory_order failure = std::memory_order_relaxed) {
+        assert(target);
+        assert(expected);
+        using C = CountedPtr<T>;
+        constexpr auto MAX = CountedPtr<T>::MAX;
+        if (expected->ptr) {
+            if (__builtin_expect(expected->cnt > 1, true)) {
+                C desired = *expected - 1;
+                if (atomic_compare_exchange_weak(target, expected,
+                                                 desired,
+                                                 std::memory_order_acquire,
+                                                 failure)) {
+                    *expected = desired;
+                    if (__builtin_expect(healthy(desired), true))
+                        return 1; // <-- fast path completes
+                                  // <-- time to replenish the local count
+                    (**expected).acquire(MAX - 1); // <-- get more weight from global count
+                    do {
+                        desired = *expected + (MAX - expected->cnt);
+                        if (atomic_compare_exchange_weak(target,
+                                                         expected,
+                                                         desired,
+                                                         std::memory_order_release,
+                                                         failure)) {
+                            if (__builtin_expect(expected->cnt == 1, false)) // <-- was entirely depleted with possible waiters ("impossible")
+                                atomic_notify_all(&target);
+                            using std::swap;
+                            swap(*expected, desired);
+                            return desired.cnt;
+                        }
+                    } while (expected->ptr == desired.ptr); // <-- while the pointer bits are unchanged
+                    (*desired).release(MAX); // <-- pointer changed under us
+                }
+                return 0; // <-- quit after one try
+            } else {
+                atomic_wait(target, *expected, failure); // <-- if we don't wait here the caller becomes a spinlock which is worse?
+            }
+        }
+        *expected = atomic_load(target, failure); // <-- meet the failure requirements though we did not call compare_exchange
+        return 0;
+    }
+    
+    
+    // acquire shared ownership of the target if it the pointer bits are as
+    // expected
+    
+    template<typename T>
+    [[nodiscard]] u64 atomic_compare_acquire_strong(CountedPtr<T>* target,
+                                                    CountedPtr<T>* expected,
+                                                    std::memory_order failure = std::memory_order_relaxed) {
+        assert(target);
+        assert(expected);
+        using C = CountedPtr<T>;
+        C desired = *expected;
+        if (!expected->ptr) {
+            *expected = atomic_load(target, failure);
+            return 0;
+        }
+        while (expected->ptr && (expected->ptr == desired.ptr)) {
+            if (__builtin_expect(expected->cnt > 1, true)) {
+                desired = *expected - 1;
+                if (atomic_compare_exchange_weak(target,
+                                                 expected,
+                                                 desired,
+                                                 std::memory_order_acquire,
+                                                 failure)) {
+                    *expected = desired;
+                    if (__builtin_expect(healthy(desired), true))
+                        return 1; // <-- fast path completes
+                                  // <-- count is a power of two, perform housekeeping
+                    (**expected).acquire(C::MAX - 1); // <-- get more weight from global count
+                    do {
+                        desired = *expected + (C::MAX - expected->cnt);
+                        if (atomic_compare_exchange_weak(target,
+                                                         expected,
+                                                         desired,
+                                                         std::memory_order_release,
+                                                         failure)) {
+                            if (__builtin_expect(expected->cnt == 1, false)) // <-- we fixed an exhausted counter
+                                atomic_notify_all(target);        // <-- notify potential waiters
+                            using std::swap;
+                            swap(*expected, desired);
+                            return desired.cnt;
+                        }
+                    } while (expected->ptr == desired.ptr); // <-- while the pointer bits are unchanged
+                    (*desired).release(C::MAX); // <-- the pointer changed under us
+                    return 0;
+                }
+                // exchange failed, try again
+            } else {
+                // locked, wait
+                atomic_wait(target, *expected, failure);
+                *expected = atomic_load(target, failure);
+            }
+        };
+        return 0;
+    }
+    
 
 } // namespace aarc
 

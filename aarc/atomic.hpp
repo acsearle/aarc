@@ -60,7 +60,7 @@ namespace aarc {
 #define A(X)\
     template<typename T>\
 bool atomic_compare_exchange_##X (T* target,\
-                                  T* expected,\
+                                  std::type_identity_t<T>* expected,\
                                   std::type_identity_t<T> desired,\
                                   std::memory_order success,\
                                   std::memory_order failure) {\
